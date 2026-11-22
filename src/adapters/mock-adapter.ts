@@ -18,7 +18,7 @@ export function createMockDiscoveryEvents(target: MockDiscoveryTarget): Discover
     occurred_at: occurredAt,
     platform: target.platform,
     evidence_ids: []
-  } as const;
+  };
 
   return [
     {
