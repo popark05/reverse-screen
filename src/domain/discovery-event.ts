@@ -1,29 +1,33 @@
 export const DISCOVERY_EVENT_TYPES = [
-  "screen.discovered",
-  "screen.state.observed",
-  "element.discovered",
-  "action.performed",
-  "transition.observed",
-  "flow.completed"
+  "screen_observed",
+  "element_observed",
+  "action_candidate",
+  "action_executed",
+  "transition_observed",
+  "assertion_observed",
+  "error",
+  "session_marker"
 ] as const;
 
 export type DiscoveryEventType = (typeof DISCOVERY_EVENT_TYPES)[number];
-export type Platform = "web" | "android" | "ios";
+export type Platform = "web" | "android" | "ios" | "hybrid";
 
 export interface DiscoveryEvent {
-  eventId: string;
-  sessionId: string;
-  applicationId: string;
-  applicationVersion?: string;
+  event_id: string;
+  session_id: string;
+  sequence: number;
+  event_type: DiscoveryEventType;
+  occurred_at: string;
   platform: Platform;
-  targetId: string;
-  occurredAt: string;
-  type: DiscoveryEventType;
+  screen_id?: string | null;
+  state_id?: string | null;
+  transition_id?: string | null;
   payload: Record<string, unknown>;
+  evidence_ids?: string[];
 }
 
 export interface StoredDiscoveryEvent extends DiscoveryEvent {
-  receivedAt: string;
+  received_at: string;
 }
 
 export interface DiscoveryEventStore {
@@ -36,14 +40,14 @@ export class InMemoryDiscoveryEventStore implements DiscoveryEventStore {
   private readonly eventIdsBySession = new Map<string, string[]>();
 
   append(event: DiscoveryEvent): { event: StoredDiscoveryEvent; duplicate: boolean } {
-    const existing = this.eventsById.get(event.eventId);
+    const existing = this.eventsById.get(event.event_id);
     if (existing) return { event: existing, duplicate: true };
 
-    const stored: StoredDiscoveryEvent = { ...event, receivedAt: new Date().toISOString() };
-    this.eventsById.set(event.eventId, stored);
-    const ids = this.eventIdsBySession.get(event.sessionId) ?? [];
-    ids.push(event.eventId);
-    this.eventIdsBySession.set(event.sessionId, ids);
+    const stored: StoredDiscoveryEvent = { ...event, received_at: new Date().toISOString() };
+    this.eventsById.set(event.event_id, stored);
+    const ids = this.eventIdsBySession.get(event.session_id) ?? [];
+    ids.push(event.event_id);
+    this.eventIdsBySession.set(event.session_id, ids);
     return { event: stored, duplicate: false };
   }
 
