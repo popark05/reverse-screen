@@ -4,6 +4,9 @@ import type { DiscoveryEvent, DiscoveryEventStore, StoredDiscoveryEvent } from "
 import type {
   CreateDiscoverySessionInput, DiscoverySession, DiscoverySessionRepository, DiscoverySessionStatus
 } from "../domain/discovery-session.js";
+import type {
+  CreateEvidenceArtifactInput, EvidenceArtifact, EvidenceArtifactStore, EvidenceKind
+} from "../domain/evidence-artifact.js";
 
 interface SessionRow {
   session_id: string; application_id: string; platform: DiscoverySession["platform"];
@@ -16,7 +19,11 @@ interface EventRow {
   state_id: string | null; transition_id: string | null; payload: Record<string, unknown>;
   evidence_ids: string[]; received_at: Date;
 }
-
+interface EvidenceRow {
+  evidence_id: string; session_id: string; event_id: string | null; kind: EvidenceKind;
+  content_type: string; byte_size: string | number; sha256: string; storage_uri: string;
+  captured_at: Date; created_at: Date;
+}
 const iso = (value: Date | string | null): string | undefined =>
   value === null ? undefined : (value instanceof Date ? value : new Date(value)).toISOString();
 
@@ -30,7 +37,6 @@ function mapSession(row: SessionRow): DiscoverySession {
     ...(row.failure_reason ? { failure_reason: row.failure_reason } : {})
   };
 }
-
 function mapEvent(row: EventRow): StoredDiscoveryEvent {
   return {
     event_id: row.event_id, session_id: row.session_id, sequence: row.sequence,
@@ -41,10 +47,18 @@ function mapEvent(row: EventRow): StoredDiscoveryEvent {
     payload: row.payload, evidence_ids: row.evidence_ids, received_at: iso(row.received_at)!
   };
 }
+function mapEvidence(row: EvidenceRow): EvidenceArtifact {
+  return {
+    evidence_id: row.evidence_id, session_id: row.session_id,
+    ...(row.event_id === null ? {} : { event_id: row.event_id }),
+    kind: row.kind, content_type: row.content_type, byte_size: Number(row.byte_size),
+    sha256: row.sha256, storage_uri: row.storage_uri,
+    captured_at: iso(row.captured_at)!, created_at: iso(row.created_at)!
+  };
+}
 
-export class PostgresDiscoveryRepository implements DiscoverySessionRepository, DiscoveryEventStore {
+export class PostgresDiscoveryRepository implements DiscoverySessionRepository, DiscoveryEventStore, EvidenceArtifactStore {
   constructor(private readonly pool: Pool) {}
-
   async create(input: CreateDiscoverySessionInput): Promise<DiscoverySession> {
     const result = await this.pool.query<SessionRow>(
       `INSERT INTO discovery_session (session_id, application_id, platform, target_id, status)
@@ -53,33 +67,21 @@ export class PostgresDiscoveryRepository implements DiscoverySessionRepository, 
     );
     return mapSession(result.rows[0]!);
   }
-
   async get(sessionId: string): Promise<DiscoverySession | undefined> {
-    const result = await this.pool.query<SessionRow>(
-      "SELECT * FROM discovery_session WHERE session_id = $1", [sessionId]
-    );
+    const result = await this.pool.query<SessionRow>("SELECT * FROM discovery_session WHERE session_id = $1", [sessionId]);
     return result.rows[0] ? mapSession(result.rows[0]) : undefined;
   }
-
   async list(): Promise<DiscoverySession[]> {
-    const result = await this.pool.query<SessionRow>(
-      "SELECT * FROM discovery_session ORDER BY created_at DESC"
-    );
+    const result = await this.pool.query<SessionRow>("SELECT * FROM discovery_session ORDER BY created_at DESC");
     return result.rows.map(mapSession);
   }
-
-  async transition(
-    sessionId: string,
-    next: Exclude<DiscoverySessionStatus, "created">,
-    failureReason?: string
-  ): Promise<DiscoverySession | undefined> {
+  async transition(sessionId: string, next: Exclude<DiscoverySessionStatus, "created">, failureReason?: string): Promise<DiscoverySession | undefined> {
     const result = await this.pool.query<SessionRow>(
       `UPDATE discovery_session
        SET status = $2,
            started_at = CASE WHEN $2 = 'running' THEN now() ELSE started_at END,
            finished_at = CASE WHEN $2 IN ('completed', 'failed', 'cancelled') THEN now() ELSE finished_at END,
-           failure_reason = COALESCE($3, failure_reason),
-           updated_at = now()
+           failure_reason = COALESCE($3, failure_reason), updated_at = now()
        WHERE session_id = $1
          AND (($2 IN ('running', 'cancelled') AND status = 'created')
            OR ($2 IN ('completed', 'failed', 'cancelled') AND status = 'running'))
@@ -88,32 +90,43 @@ export class PostgresDiscoveryRepository implements DiscoverySessionRepository, 
     );
     return result.rows[0] ? mapSession(result.rows[0]) : undefined;
   }
-
   async append(event: DiscoveryEvent): Promise<{ event: StoredDiscoveryEvent; duplicate: boolean }> {
     const inserted = await this.pool.query<EventRow>(
       `INSERT INTO discovery_event
-       (event_id, session_id, sequence, event_type, occurred_at, platform, screen_id, state_id,
-        transition_id, payload, evidence_ids)
+       (event_id, session_id, sequence, event_type, occurred_at, platform, screen_id, state_id, transition_id, payload, evidence_ids)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::uuid[])
-       ON CONFLICT (event_id) DO NOTHING
-       RETURNING *`,
+       ON CONFLICT (event_id) DO NOTHING RETURNING *`,
       [event.event_id, event.session_id, event.sequence, event.event_type, event.occurred_at,
         event.platform, event.screen_id ?? null, event.state_id ?? null, event.transition_id ?? null,
         JSON.stringify(event.payload), event.evidence_ids ?? []]
     );
     if (inserted.rows[0]) return { event: mapEvent(inserted.rows[0]), duplicate: false };
-
-    const existing = await this.pool.query<EventRow>(
-      "SELECT * FROM discovery_event WHERE event_id = $1", [event.event_id]
-    );
+    const existing = await this.pool.query<EventRow>("SELECT * FROM discovery_event WHERE event_id = $1", [event.event_id]);
     if (!existing.rows[0]) throw new Error("Event insert conflicted but the existing event could not be loaded");
     return { event: mapEvent(existing.rows[0]), duplicate: true };
   }
-
   async listBySession(sessionId: string): Promise<StoredDiscoveryEvent[]> {
-    const result = await this.pool.query<EventRow>(
-      "SELECT * FROM discovery_event WHERE session_id = $1 ORDER BY sequence ASC", [sessionId]
-    );
+    const result = await this.pool.query<EventRow>("SELECT * FROM discovery_event WHERE session_id = $1 ORDER BY sequence ASC", [sessionId]);
     return result.rows.map(mapEvent);
+  }
+  async create(input: CreateEvidenceArtifactInput): Promise<EvidenceArtifact> {
+    const result = await this.pool.query<EvidenceRow>(
+      `INSERT INTO evidence_artifact
+       (evidence_id, session_id, event_id, kind, content_type, byte_size, sha256, storage_uri, captured_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [randomUUID(), input.session_id, input.event_id ?? null, input.kind, input.content_type,
+        input.byte_size, input.sha256, input.storage_uri, input.captured_at]
+    );
+    return mapEvidence(result.rows[0]!);
+  }
+  async get(evidenceId: string): Promise<EvidenceArtifact | undefined> {
+    const result = await this.pool.query<EvidenceRow>("SELECT * FROM evidence_artifact WHERE evidence_id = $1", [evidenceId]);
+    return result.rows[0] ? mapEvidence(result.rows[0]) : undefined;
+  }
+  async listBySession(sessionId: string): Promise<EvidenceArtifact[]> {
+    const result = await this.pool.query<EvidenceRow>(
+      "SELECT * FROM evidence_artifact WHERE session_id = $1 ORDER BY captured_at ASC", [sessionId]
+    );
+    return result.rows.map(mapEvidence);
   }
 }

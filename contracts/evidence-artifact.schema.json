@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/reverse-screen/evidence-artifact/v1/schema.json",
+  "title": "Evidence Artifact Metadata",
+  "type": "object",
+  "required": ["evidence_id", "session_id", "kind", "content_type", "byte_size", "sha256", "storage_uri", "captured_at", "created_at"],
+  "properties": {
+    "evidence_id": { "type": "string", "format": "uuid" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "kind": { "type": "string", "enum": ["screenshot", "video", "dom_snapshot", "accessibility_tree", "log", "network_trace"] },
+    "content_type": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "byte_size": { "type": "integer", "minimum": 0 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "storage_uri": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

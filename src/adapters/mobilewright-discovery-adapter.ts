@@ -19,78 +19,74 @@ interface ViewNode {
   bounds: { x: number; y: number; width: number; height: number };
   children: ViewNode[];
 }
-
+interface WebLocator {
+  count(): Promise<number>;
+  nth(index: number): WebLocator;
+  getAttribute(name: string): Promise<string | null>;
+  innerText(): Promise<string>;
+  boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null>;
+  isVisible(): Promise<boolean>;
+  isEnabled(): Promise<boolean>;
+}
+interface WebPage {
+  url(): string;
+  title(): Promise<string>;
+  content(): Promise<string>;
+  locator(selector: string): WebLocator;
+  getByRole(role: string): WebLocator;
+  close(): Promise<void>;
+}
+interface WebViewLocator {
+  count(): Promise<number>;
+  nth(index: number): { page(): Promise<WebPage> };
+}
 interface MobilewrightDevice {
   id: string;
-  screen: { viewTree(): Promise<ViewNode[]> };
+  screen: {
+    viewTree(): Promise<ViewNode[]>;
+    getByWebView(): WebViewLocator;
+    screenshot(): Promise<Buffer>;
+  };
   getForegroundApp(): Promise<{ bundleId: string; name?: string; version?: string }>;
   screenSize(): Promise<{ width: number; height: number; scale: number }>;
   close(): Promise<void>;
 }
-
-interface LaunchOptions {
-  deviceId: string;
-  bundleId: string;
-  installApps?: string | string[];
-}
-
-interface Launcher {
-  launch(options: LaunchOptions): Promise<MobilewrightDevice>;
-}
-
-interface LauncherFactory {
-  ios: Launcher;
-  android: Launcher;
-}
-
-const defaultFactory = {
-  ios: ios as unknown as Launcher,
-  android: android as unknown as Launcher
-} satisfies LauncherFactory;
+interface LaunchOptions { deviceId: string; bundleId: string; installApps?: string | string[]; }
+interface Launcher { launch(options: LaunchOptions): Promise<MobilewrightDevice>; }
+interface LauncherFactory { ios: Launcher; android: Launcher; }
+const defaultFactory = { ios: ios as unknown as Launcher, android: android as unknown as Launcher } satisfies LauncherFactory;
 
 export interface MobilewrightDiscoveryOptions {
   bundleId: string;
   installAppPath?: string;
   maxElements?: number;
+  maxWebViewElements?: number;
 }
 
-interface FlattenedNode {
-  node: ViewNode;
-  depth: number;
-  parentKey?: string;
-  elementKey: string;
-}
+interface FlattenedNode { node: ViewNode; depth: number; parentKey?: string; elementKey: string; }
+const WEB_ROLES = ["button", "link", "textbox", "checkbox", "radio", "switch", "tab", "heading", "img", "listitem", "combobox", "option", "alert", "dialog", "menuitem"];
 
 function stableKey(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 20);
 }
-
 function flattenTree(nodes: ViewNode[], maxElements: number): FlattenedNode[] {
   const result: FlattenedNode[] = [];
   const visit = (node: ViewNode, depth: number, path: string, parentKey?: string): void => {
     if (result.length >= maxElements) return;
-    const signature = [
-      node.type, node.identifier ?? "", node.resourceId ?? "",
-      node.label ?? "", node.placeholder ?? "", node.text ?? ""
-    ].join("|");
+    const signature = [node.type, node.identifier ?? "", node.resourceId ?? "", node.label ?? "", node.placeholder ?? "", node.text ?? ""].join("|");
     const elementKey = `native-element:${stableKey(`${path}|${signature}`)}`;
     result.push({ node, depth, ...(parentKey === undefined ? {} : { parentKey }), elementKey });
-    for (const [index, child] of (node.children ?? []).entries()) {
-      visit(child, depth + 1, `${path}.${index}`, elementKey);
-    }
+    for (const [index, child] of (node.children ?? []).entries()) visit(child, depth + 1, `${path}.${index}`, elementKey);
   };
   for (const [index, node] of nodes.entries()) visit(node, 0, String(index));
   return result;
 }
-
 function countNodes(nodes: ViewNode[]): number {
   return nodes.reduce((count, node) => count + 1 + countNodes(node.children ?? []), 0);
 }
-
 function isEditable(node: ViewNode): boolean {
   return /text.?field|edit.?text|search.?field|password/i.test(node.type);
 }
-
 function inferRole(node: ViewNode): string {
   const type = node.type.toLowerCase();
   if (/button/.test(type)) return "button";
@@ -106,7 +102,6 @@ function inferRole(node: ViewNode): string {
   if (/static.?text|text.?view|label/.test(type)) return "text";
   return "other";
 }
-
 function isActionable(node: ViewNode, role: string): boolean {
   if (!node.isVisible || !node.isEnabled) return false;
   if (isEditable(node) || ["button", "switch", "checkbox", "radio", "tab", "link"].includes(role)) return true;
@@ -115,10 +110,7 @@ function isActionable(node: ViewNode, role: string): boolean {
 }
 
 export class MobilewrightDiscoveryAdapter {
-  constructor(
-    private readonly options: MobilewrightDiscoveryOptions,
-    private readonly factory: LauncherFactory = defaultFactory
-  ) {
+  constructor(private readonly options: MobilewrightDiscoveryOptions, private readonly factory: LauncherFactory = defaultFactory) {
     if (!options.bundleId.trim()) throw new Error("MOBILE_APP_BUNDLE_ID is required");
   }
 
@@ -132,55 +124,34 @@ export class MobilewrightDiscoveryAdapter {
       bundleId: this.options.bundleId,
       ...(this.options.installAppPath ? { installApps: this.options.installAppPath } : {})
     });
-
     try {
       const [tree, app, size] = await Promise.all([
         device.screen.viewTree(),
         device.getForegroundApp().catch((): { bundleId: string; name?: string; version?: string } => ({ bundleId: this.options.bundleId })),
         device.screenSize().catch(() => undefined)
       ]);
-      const maxElements = this.options.maxElements ?? 300;
-      const flattened = flattenTree(tree, maxElements);
       const observedAt = new Date().toISOString();
-      const screenId = randomUUID();
-      const stateId = randomUUID();
-      const screenSignature = flattened.map(({ node }) => [
-        node.type, node.identifier ?? "", node.resourceId ?? "", node.label ?? "",
-        isEditable(node) ? "" : node.text ?? ""
-      ].join("|")).join("\n");
-      const screenKey = `native:${stableKey([session.platform, app.bundleId, screenSignature].join("|"))}`;
       const events: DiscoveryEvent[] = [];
       let sequence = 0;
       const addEvent = (input: Omit<DiscoveryEvent, "event_id" | "session_id" | "sequence" | "platform">): void => {
-        events.push({
-          ...input,
-          event_id: randomUUID(),
-          session_id: session.session_id,
-          sequence: ++sequence,
-          platform: session.platform as Platform
-        });
+        events.push({ ...input, event_id: randomUUID(), session_id: session.session_id, sequence: ++sequence, platform: session.platform as Platform });
       };
 
+      const maxElements = this.options.maxElements ?? 300;
+      const flattened = flattenTree(tree, maxElements);
+      const nativeScreenId = randomUUID();
+      const nativeStateId = randomUUID();
+      const nativeSignature = flattened.map(({ node }) => [node.type, node.identifier ?? "", node.resourceId ?? "", node.label ?? "", isEditable(node) ? "" : node.text ?? ""].join("|")).join("\n");
       addEvent({
-        event_type: "screen_observed",
-        screen_id: screenId,
-        state_id: stateId,
-        occurred_at: observedAt,
+        event_type: "screen_observed", screen_id: nativeScreenId, state_id: nativeStateId, occurred_at: observedAt,
         payload: {
-          application_id: session.application_id,
-          target_id: session.target_id,
-          screen_key: screenKey,
-          name: app.name ?? app.bundleId,
-          bundle_id: app.bundleId,
-          app_version: app.version,
-          element_count: flattened.length,
-          tree_node_count: countNodes(tree),
-          truncated: flattened.length < countNodes(tree),
-          ...(size ? { screen_size: size } : {}),
-          observation_source: "mobilewright_accessibility_tree"
+          context_type: "native", application_id: session.application_id, target_id: session.target_id,
+          screen_key: `native:${stableKey([session.platform, app.bundleId, nativeSignature].join("|"))}`,
+          name: app.name ?? app.bundleId, bundle_id: app.bundleId, app_version: app.version,
+          element_count: flattened.length, tree_node_count: countNodes(tree), truncated: flattened.length < countNodes(tree),
+          ...(size ? { screen_size: size } : {}), observation_source: "mobilewright_accessibility_tree"
         }
       });
-
       for (const { node, depth, parentKey, elementKey } of flattened) {
         const role = inferRole(node);
         const label = node.label?.trim() ?? "";
@@ -192,45 +163,105 @@ export class MobilewrightDiscoveryAdapter {
           ...(text && text !== label ? [{ strategy: "text", value: text }] : [])
         ];
         addEvent({
-          event_type: "element_observed",
-          screen_id: screenId,
-          state_id: stateId,
-          occurred_at: observedAt,
+          event_type: "element_observed", screen_id: nativeScreenId, state_id: nativeStateId, occurred_at: observedAt,
           payload: {
-            element_key: elementKey,
-            element_type: node.type,
-            role,
+            context_type: "native", element_key: elementKey, element_type: node.type, role,
             accessible_name: label || text || node.placeholder || node.identifier || node.resourceId || "",
-            ...(text ? { text } : {}),
-            ...(node.placeholder ? { placeholder: node.placeholder } : {}),
-            visible: node.isVisible,
-            enabled: node.isEnabled,
+            ...(text ? { text } : {}), ...(node.placeholder ? { placeholder: node.placeholder } : {}),
+            visible: node.isVisible, enabled: node.isEnabled,
             ...(node.isSelected === undefined ? {} : { selected: node.isSelected }),
             ...(node.isChecked === undefined ? {} : { checked: node.isChecked }),
-            depth,
-            ...(parentKey ? { parent_element_key: parentKey } : {}),
-            bounds: node.bounds,
-            locator_candidates: locatorCandidates,
-            value_redacted: isEditable(node)
+            depth, ...(parentKey ? { parent_element_key: parentKey } : {}), bounds: node.bounds,
+            locator_candidates: locatorCandidates, value_redacted: isEditable(node)
           }
         });
-        if (isActionable(node, role)) {
-          addEvent({
-            event_type: "action_candidate",
-            screen_id: screenId,
-            state_id: stateId,
-            occurred_at: observedAt,
-            payload: {
-              action: isEditable(node) ? "enter_text" : "tap",
-              target_element_key: elementKey,
-              enabled: node.isEnabled
-            }
-          });
-        }
+        if (isActionable(node, role)) addEvent({
+          event_type: "action_candidate", screen_id: nativeScreenId, state_id: nativeStateId, occurred_at: observedAt,
+          payload: { context_type: "native", action: isEditable(node) ? "enter_text" : "tap", target_element_key: elementKey, enabled: node.isEnabled }
+        });
       }
+
+      await this.observeWebViews(device, session, observedAt, addEvent);
       return events;
     } finally {
       await device.close();
+    }
+  }
+
+  private async observeWebViews(
+    device: MobilewrightDevice,
+    session: DiscoverySession,
+    observedAt: string,
+    addEvent: (input: Omit<DiscoveryEvent, "event_id" | "session_id" | "sequence" | "platform">) => void
+  ): Promise<void> {
+    let webViewCount = 0;
+    try { webViewCount = await device.screen.getByWebView().count(); }
+    catch { return; }
+    const maxElements = this.options.maxWebViewElements ?? 200;
+    for (let index = 0; index < webViewCount; index++) {
+      let page: WebPage | undefined;
+      try {
+        page = await device.screen.getByWebView().nth(index).page();
+        const [url, title, html] = await Promise.all([Promise.resolve(page.url()), page.title(), page.content()]);
+        const domElements = page.locator("*");
+        const domCount = await domElements.count();
+        const screenId = randomUUID();
+        const stateId = randomUUID();
+        const snapshotHash = createHash("sha256").update(html).digest("hex");
+        addEvent({
+          event_type: "screen_observed", screen_id: screenId, state_id: stateId, occurred_at: observedAt,
+          payload: {
+            context_type: "webview", parent_context_type: "native", webview_index: index,
+            application_id: session.application_id, target_id: session.target_id, url, title,
+            screen_key: `webview:${stableKey([session.platform, url, title, snapshotHash].join("|"))}`,
+            dom_snapshot_sha256: snapshotHash, dom_element_count: domCount,
+            observed_element_count: Math.min(domCount, maxElements), truncated: domCount > maxElements,
+            observation_source: "mobilewright_webview_dom"
+          }
+        });
+        let observed = 0;
+        for (const role of WEB_ROLES) {
+          if (observed >= maxElements) break;
+          const locator = page.getByRole(role);
+          const count = await locator.count().catch(() => 0);
+          for (let i = 0; i < count && observed < maxElements; i++) {
+            const element = locator.nth(i);
+            try {
+              if (!(await element.isVisible())) continue;
+              const [ariaLabel, testId, placeholder, name, id, text, bounds, enabled] = await Promise.all([
+                element.getAttribute("aria-label"), element.getAttribute("data-testid"),
+                element.getAttribute("placeholder"), element.getAttribute("name"), element.getAttribute("id"),
+                ["textbox"].includes(role) ? Promise.resolve("") : element.innerText().catch(() => ""),
+                element.boundingBox(), element.isEnabled().catch(() => true)
+              ]);
+              const accessibleName = ariaLabel || placeholder || name || testId || id || text.trim().slice(0, 200);
+              const key = `web-element:${stableKey([index, role, accessibleName, testId ?? "", id ?? "", i].join("|"))}`;
+              addEvent({
+                event_type: "element_observed", screen_id: screenId, state_id: stateId, occurred_at: observedAt,
+                payload: {
+                  context_type: "webview", webview_index: index, element_key: key, role,
+                  accessible_name: accessibleName, ...(testId ? { test_id: testId } : {}),
+                  ...(placeholder ? { placeholder } : {}), ...(text.trim() ? { text: text.trim().slice(0, 500) } : {}),
+                  visible: true, enabled, ...(bounds ? { bounds } : {}),
+                  locator_candidates: [
+                    { strategy: "role_name", value: role, name: accessibleName },
+                    ...(testId ? [{ strategy: "test_id", value: testId }] : [])
+                  ],
+                  value_redacted: role === "textbox"
+                }
+              });
+              observed++;
+            } catch { /* A DOM node can detach during a live observation. */ }
+          }
+        }
+      } catch (error) {
+        addEvent({
+          event_type: "error", occurred_at: observedAt,
+          payload: { context_type: "webview", webview_index: index, error: error instanceof Error ? error.message : String(error) }
+        });
+      } finally {
+        await page?.close().catch(() => {});
+      }
     }
   }
 }

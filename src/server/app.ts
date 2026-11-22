@@ -5,6 +5,10 @@ import {
 import {
   InMemoryDiscoveryEventStore, type DiscoveryEvent, type DiscoveryEventStore
 } from "../domain/discovery-event.js";
+import {
+  EVIDENCE_KINDS, InMemoryEvidenceArtifactStore, type CreateEvidenceArtifactInput,
+  type EvidenceArtifactStore
+} from "../domain/evidence-artifact.js";
 
 const discoveryEventSchema = {
   type: "object", additionalProperties: false,
@@ -41,14 +45,29 @@ const transitionSchema = {
   }
 } as const;
 
+const createEvidenceSchema = {
+  type: "object", additionalProperties: false,
+  required: ["session_id", "kind", "content_type", "byte_size", "sha256", "storage_uri", "captured_at"],
+  properties: {
+    session_id: { type: "string", format: "uuid" },
+    event_id: { type: "string", format: "uuid" },
+    kind: { type: "string", enum: EVIDENCE_KINDS },
+    content_type: { type: "string", minLength: 1, maxLength: 200 },
+    byte_size: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+    sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    storage_uri: { type: "string", minLength: 1, maxLength: 2048, pattern: "^(s3|gs|https?)://" },
+    captured_at: { type: "string", format: "date-time" }
+  }
+} as const;
+
 export interface DiscoveryObserver {
   observe(session: DiscoverySession): Promise<DiscoveryEvent[]>;
   close?(): Promise<void>;
 }
-
 export interface AppOptions {
   store?: DiscoveryEventStore;
   sessions?: DiscoverySessionRepository;
+  evidence?: EvidenceArtifactStore;
   observer?: DiscoveryObserver;
   onClose?: () => Promise<void>;
 }
@@ -57,6 +76,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: true });
   const store = options.store ?? new InMemoryDiscoveryEventStore();
   const sessions = options.sessions ?? new InMemoryDiscoverySessionStore();
+  const evidence = options.evidence ?? new InMemoryEvidenceArtifactStore();
 
   app.addHook("onClose", async () => {
     await options.observer?.close?.();
@@ -81,17 +101,12 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     if (current.status !== "created") return reply.code(409).send({ error: "discovery_session_not_created" });
     const running = await sessions.transition(current.session_id, "running");
     if (!running) return reply.code(409).send({ error: "invalid_session_transition" });
-
     try {
       const events = await options.observer.observe(running);
       const accepted = [];
       for (const event of events) accepted.push(await store.append(event));
       const completed = await sessions.transition(current.session_id, "completed");
-      return reply.code(201).send({
-        session: completed,
-        accepted_count: accepted.length,
-        events: accepted.map((item) => item.event)
-      });
+      return reply.code(201).send({ session: completed, accepted_count: accepted.length, events: accepted.map((item) => item.event) });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await sessions.transition(current.session_id, "failed", reason.slice(0, 2000));
@@ -106,8 +121,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       return session;
     }
   );
-  app.post<{ Body: DiscoveryEvent }>(
-    "/v1/discovery-events", { schema: { body: discoveryEventSchema } },
+  app.post<{ Body: DiscoveryEvent }>("/v1/discovery-events", { schema: { body: discoveryEventSchema } },
     async (request, reply) => {
       const result = await store.append(request.body);
       return reply.code(result.duplicate ? 200 : 202).send({ accepted: true, duplicate: result.duplicate, event: result.event });
@@ -116,5 +130,24 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   app.get<{ Params: { sessionId: string } }>("/v1/discovery-sessions/:sessionId/events", async (request) => ({
     session_id: request.params.sessionId, events: await store.listBySession(request.params.sessionId)
   }));
+
+  app.post<{ Body: CreateEvidenceArtifactInput }>("/v1/evidence-artifacts", { schema: { body: createEvidenceSchema } },
+    async (request, reply) => {
+      const session = await sessions.get(request.body.session_id);
+      if (!session) return reply.code(404).send({ error: "discovery_session_not_found" });
+      const artifact = await evidence.create(request.body);
+      return reply.code(201).send(artifact);
+    }
+  );
+  app.get<{ Params: { evidenceId: string } }>("/v1/evidence-artifacts/:evidenceId", async (request, reply) => {
+    const artifact = await evidence.get(request.params.evidenceId);
+    if (!artifact) return reply.code(404).send({ error: "evidence_artifact_not_found" });
+    return artifact;
+  });
+  app.get<{ Params: { sessionId: string } }>("/v1/discovery-sessions/:sessionId/evidence", async (request, reply) => {
+    const session = await sessions.get(request.params.sessionId);
+    if (!session) return reply.code(404).send({ error: "discovery_session_not_found" });
+    return { session_id: request.params.sessionId, items: await evidence.listBySession(request.params.sessionId) };
+  });
   return app;
 }
