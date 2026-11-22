@@ -7,27 +7,31 @@ import {
 const discoveryEventSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["eventId", "sessionId", "applicationId", "platform", "targetId", "occurredAt", "type", "payload"],
+  required: ["event_id", "session_id", "sequence", "event_type", "occurred_at", "platform", "payload"],
   properties: {
-    eventId: { type: "string", minLength: 1, maxLength: 200 },
-    sessionId: { type: "string", minLength: 1, maxLength: 200 },
-    applicationId: { type: "string", minLength: 1, maxLength: 200 },
-    applicationVersion: { type: "string", maxLength: 100 },
-    platform: { type: "string", enum: ["web", "android", "ios"] },
-    targetId: { type: "string", minLength: 1, maxLength: 200 },
-    occurredAt: { type: "string", format: "date-time" },
-    type: {
+    event_id: { type: "string", format: "uuid" },
+    session_id: { type: "string", format: "uuid" },
+    sequence: { type: "integer", minimum: 1 },
+    event_type: {
       type: "string",
       enum: [
-        "screen.discovered",
-        "screen.state.observed",
-        "element.discovered",
-        "action.performed",
-        "transition.observed",
-        "flow.completed"
+        "screen_observed",
+        "element_observed",
+        "action_candidate",
+        "action_executed",
+        "transition_observed",
+        "assertion_observed",
+        "error",
+        "session_marker"
       ]
     },
-    payload: { type: "object" }
+    occurred_at: { type: "string", format: "date-time" },
+    platform: { type: "string", enum: ["web", "android", "ios", "hybrid"] },
+    screen_id: { type: ["string", "null"], format: "uuid" },
+    state_id: { type: ["string", "null"], format: "uuid" },
+    transition_id: { type: ["string", "null"], format: "uuid" },
+    payload: { type: "object", additionalProperties: true },
+    evidence_ids: { type: "array", items: { type: "string", format: "uuid" } }
   }
 } as const;
 
@@ -57,7 +61,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   app.get<{ Params: { sessionId: string } }>(
     "/v1/discovery-sessions/:sessionId/events",
     async (request) => ({
-      sessionId: request.params.sessionId,
+      session_id: request.params.sessionId,
       events: store.listBySession(request.params.sessionId)
     })
   );
