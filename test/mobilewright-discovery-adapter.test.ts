@@ -43,7 +43,7 @@ test("Mobilewright discovery emits native and WebView contexts in one ordered se
     close: async () => { calls.push("device-close"); }
   };
   const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "com.example.app" }, {
-    ios: { launch: async () => device }, android: { launch: async () => device }
+    ios: { launch: async () => device as never }, android: { launch: async () => device as never }
   });
   const events = await adapter.observe(session);
   assert.equal(events[0]?.payload.context_type, "native");

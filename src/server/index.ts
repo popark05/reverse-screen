@@ -3,7 +3,7 @@ import { MobilewrightDiscoveryAdapter } from "../adapters/mobilewright-discovery
 import { InMemoryDiscoveryEventStore } from "../domain/discovery-event.js";
 import { InMemoryDiscoverySessionStore } from "../domain/discovery-session.js";
 import { InMemoryEvidenceArtifactStore } from "../domain/evidence-artifact.js";
-import { PostgresDiscoveryRepository } from "../infrastructure/postgres-discovery-repository.js";
+import { PostgresDiscoveryRepository, PostgresEvidenceArtifactRepository } from "../infrastructure/postgres-discovery-repository.js";
 import { buildApp } from "./app.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -27,8 +27,9 @@ const app = databaseUrl
   ? (() => {
       const pool = new Pool({ connectionString: databaseUrl, max: Number(process.env.DB_POOL_MAX ?? 10) });
       const repository = new PostgresDiscoveryRepository(pool);
+      const evidence = new PostgresEvidenceArtifactRepository(pool);
       return buildApp({
-        store: repository, sessions: repository, evidence: repository,
+        store: repository, sessions: repository, evidence,
         ...(observer ? { observer } : {}), onClose: () => pool.end()
       });
     })()
