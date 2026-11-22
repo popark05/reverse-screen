@@ -10,41 +10,53 @@ export interface MockDiscoveryTarget {
 
 export function createMockDiscoveryEvents(target: MockDiscoveryTarget): DiscoveryEvent[] {
   const occurredAt = new Date().toISOString();
-  const screenId = "screen.home";
-  const stateId = "state.home.default";
+  const screenId = randomUUID();
+  const stateId = randomUUID();
 
   const base = {
-    sessionId: target.sessionId,
-    applicationId: target.applicationId,
+    session_id: target.sessionId,
+    occurred_at: occurredAt,
     platform: target.platform,
-    targetId: target.targetId,
-    occurredAt
+    evidence_ids: []
   } as const;
 
   return [
     {
       ...base,
-      eventId: randomUUID(),
-      type: "screen.discovered",
-      payload: { screenId, name: "Home", route: "/" }
-    },
-    {
-      ...base,
-      eventId: randomUUID(),
-      type: "screen.state.observed",
-      payload: { screenId, stateId, name: "default" }
-    },
-    {
-      ...base,
-      eventId: randomUUID(),
-      type: "element.discovered",
+      event_id: randomUUID(),
+      sequence: 1,
+      event_type: "screen_observed",
+      screen_id: screenId,
+      state_id: stateId,
       payload: {
-        screenId,
-        stateId,
-        elementId: "element.login",
-        role: "button",
-        accessibleName: "Log in"
+        application_id: target.applicationId,
+        target_id: target.targetId,
+        screen_key: "screen.home",
+        name: "Home",
+        route: "/"
       }
+    },
+    {
+      ...base,
+      event_id: randomUUID(),
+      sequence: 2,
+      event_type: "element_observed",
+      screen_id: screenId,
+      state_id: stateId,
+      payload: {
+        element_key: "element.login",
+        role: "button",
+        accessible_name: "Log in"
+      }
+    },
+    {
+      ...base,
+      event_id: randomUUID(),
+      sequence: 3,
+      event_type: "action_candidate",
+      screen_id: screenId,
+      state_id: stateId,
+      payload: { action: "tap", target_element_key: "element.login" }
     }
   ];
 }
