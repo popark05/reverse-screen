@@ -94,8 +94,8 @@ function isEditable(node: ViewNode): boolean {
 function inferRole(node: ViewNode): string {
   const type = node.type.toLowerCase();
   if (/button/.test(type)) return "button";
-  if (/text.?field|edit.?text|search.?field/.test(type)) return "textbox";
   if (/secure|password/.test(type)) return "password";
+  if (/text.?field|edit.?text|search.?field/.test(type)) return "textbox";
   if (/switch|toggle/.test(type)) return "switch";
   if (/check.?box/.test(type)) return "checkbox";
   if (/radio/.test(type)) return "radio";
@@ -136,7 +136,7 @@ export class MobilewrightDiscoveryAdapter {
     try {
       const [tree, app, size] = await Promise.all([
         device.screen.viewTree(),
-        device.getForegroundApp().catch(() => ({ bundleId: this.options.bundleId })),
+        device.getForegroundApp().catch((): { bundleId: string; name?: string; version?: string } => ({ bundleId: this.options.bundleId })),
         device.screenSize().catch(() => undefined)
       ]);
       const maxElements = this.options.maxElements ?? 300;
