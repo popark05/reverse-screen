@@ -1,9 +1,9 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import {
-  InMemoryDiscoverySessionStore, type DiscoverySessionRepository
+  InMemoryDiscoverySessionStore, type DiscoverySession, type DiscoverySessionRepository
 } from "../domain/discovery-session.js";
 import {
-  InMemoryDiscoveryEventStore, type DiscoveryEventStore
+  InMemoryDiscoveryEventStore, type DiscoveryEvent, type DiscoveryEventStore
 } from "../domain/discovery-event.js";
 
 const discoveryEventSchema = {
@@ -41,9 +41,15 @@ const transitionSchema = {
   }
 } as const;
 
+export interface DiscoveryObserver {
+  observe(session: DiscoverySession): Promise<DiscoveryEvent[]>;
+  close?(): Promise<void>;
+}
+
 export interface AppOptions {
   store?: DiscoveryEventStore;
   sessions?: DiscoverySessionRepository;
+  observer?: DiscoveryObserver;
   onClose?: () => Promise<void>;
 }
 
@@ -52,7 +58,10 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const store = options.store ?? new InMemoryDiscoveryEventStore();
   const sessions = options.sessions ?? new InMemoryDiscoverySessionStore();
 
-  app.addHook("onClose", async () => { await options.onClose?.(); });
+  app.addHook("onClose", async () => {
+    await options.observer?.close?.();
+    await options.onClose?.();
+  });
   app.get("/health", async () => ({ status: "ok", service: "reverse-screen" }));
 
   app.post<{ Body: { application_id: string; platform: "web" | "android" | "ios" | "hybrid"; target_id: string } }>(
@@ -65,6 +74,30 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     if (!session) return reply.code(404).send({ error: "discovery_session_not_found" });
     return session;
   });
+  app.post<{ Params: { sessionId: string } }>("/v1/discovery-sessions/:sessionId/observe", async (request, reply) => {
+    if (!options.observer) return reply.code(501).send({ error: "discovery_observer_not_configured" });
+    const current = await sessions.get(request.params.sessionId);
+    if (!current) return reply.code(404).send({ error: "discovery_session_not_found" });
+    if (current.status !== "created") return reply.code(409).send({ error: "discovery_session_not_created" });
+    const running = await sessions.transition(current.session_id, "running");
+    if (!running) return reply.code(409).send({ error: "invalid_session_transition" });
+
+    try {
+      const events = await options.observer.observe(running);
+      const accepted = [];
+      for (const event of events) accepted.push(await store.append(event));
+      const completed = await sessions.transition(current.session_id, "completed");
+      return reply.code(201).send({
+        session: completed,
+        accepted_count: accepted.length,
+        events: accepted.map((item) => item.event)
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await sessions.transition(current.session_id, "failed", reason.slice(0, 2000));
+      return reply.code(502).send({ error: "discovery_observation_failed", message: reason });
+    }
+  });
   app.post<{ Params: { sessionId: string }; Body: { status: "running" | "completed" | "failed" | "cancelled"; failure_reason?: string } }>(
     "/v1/discovery-sessions/:sessionId/transitions", { schema: { body: transitionSchema } },
     async (request, reply) => {
@@ -73,7 +106,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       return session;
     }
   );
-  app.post<{ Body: Parameters<DiscoveryEventStore["append"]>[0] }>(
+  app.post<{ Body: DiscoveryEvent }>(
     "/v1/discovery-events", { schema: { body: discoveryEventSchema } },
     async (request, reply) => {
       const result = await store.append(request.body);

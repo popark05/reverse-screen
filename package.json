@@ -1,10 +1,10 @@
 {
   "name": "@popark05/reverse-screen",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": false,
   "description": "Runtime discovery engine for web, mobile and hybrid application screens and flows.",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=22.12" },
   "scripts": {
     "dev": "tsx watch src/server/index.ts",
     "build": "tsc -p tsconfig.json",
@@ -12,7 +12,7 @@
     "test": "tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": { "fastify": "^5.2.1", "pg": "^8.13.3", "playwright": "^1.55.0" },
+  "dependencies": { "fastify": "^5.2.1", "mobilewright": "0.0.70", "pg": "^8.13.3", "playwright": "^1.55.0" },
   "devDependencies": {
     "@types/node": "^22.13.4",
     "@types/pg": "^8.11.11",
