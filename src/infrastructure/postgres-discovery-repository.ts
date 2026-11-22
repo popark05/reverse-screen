@@ -118,8 +118,6 @@ export class PostgresDiscoveryRepository implements DiscoverySessionRepository, 
   }
 }
 
-import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
 import type { CreateEvidenceArtifactInput, EvidenceArtifact, EvidenceArtifactStore, EvidenceKind } from "../domain/evidence-artifact.js";
 
 interface EvidenceRow {

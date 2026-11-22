@@ -65,7 +65,7 @@ test("native-only apps complete discovery when no WebView is present", async () 
     screenSize: async () => ({ width: 1, height: 1, scale: 1 }), close: async () => {}
   };
   const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "com.example.app" }, {
-    ios: { launch: async () => device }, android: { launch: async () => device }
+    ios: { launch: async () => device as never }, android: { launch: async () => device as never }
   });
   const events = await adapter.observe(session);
   assert.equal(events.length, 1);
