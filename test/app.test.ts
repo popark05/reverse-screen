@@ -13,12 +13,12 @@ test("health endpoint reports service status", async () => {
 
 test("discovery events can be ingested and queried by session", async () => {
   const app = buildApp();
-  const [event] = createMockDiscoveryEvents({
+  const event = createMockDiscoveryEvents({
     applicationId: "demo-app",
     sessionId: "session-1",
     targetId: "android-emulator",
     platform: "android"
-  });
+  })[0]!;
 
   const accepted = await app.inject({
     method: "POST",
@@ -39,12 +39,12 @@ test("discovery events can be ingested and queried by session", async () => {
 
 test("event ingestion is idempotent by eventId", async () => {
   const app = buildApp();
-  const [event] = createMockDiscoveryEvents({
+  const event = createMockDiscoveryEvents({
     applicationId: "demo-app",
     sessionId: "session-2",
     targetId: "web-chrome",
     platform: "web"
-  });
+  })[0]!;
   const send = () => app.inject({ method: "POST", url: "/v1/discovery-events", payload: event });
 
   assert.equal((await send()).statusCode, 202);
@@ -56,12 +56,12 @@ test("event ingestion is idempotent by eventId", async () => {
 
 test("invalid platform is rejected by request validation", async () => {
   const app = buildApp();
-  const [event] = createMockDiscoveryEvents({
+  const event = createMockDiscoveryEvents({
     applicationId: "demo-app",
     sessionId: "session-3",
     targetId: "unknown",
     platform: "ios"
-  });
+  })[0]!;
   const response = await app.inject({
     method: "POST",
     url: "/v1/discovery-events",
