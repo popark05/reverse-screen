@@ -1,12 +1,6 @@
 export const DISCOVERY_EVENT_TYPES = [
-  "screen_observed",
-  "element_observed",
-  "action_candidate",
-  "action_executed",
-  "transition_observed",
-  "assertion_observed",
-  "error",
-  "session_marker"
+  "screen_observed", "element_observed", "action_candidate", "action_executed",
+  "transition_observed", "assertion_observed", "error", "session_marker"
 ] as const;
 
 export type DiscoveryEventType = (typeof DISCOVERY_EVENT_TYPES)[number];
@@ -31,18 +25,17 @@ export interface StoredDiscoveryEvent extends DiscoveryEvent {
 }
 
 export interface DiscoveryEventStore {
-  append(event: DiscoveryEvent): { event: StoredDiscoveryEvent; duplicate: boolean };
-  listBySession(sessionId: string): StoredDiscoveryEvent[];
+  append(event: DiscoveryEvent): Promise<{ event: StoredDiscoveryEvent; duplicate: boolean }>;
+  listBySession(sessionId: string): Promise<StoredDiscoveryEvent[]>;
 }
 
 export class InMemoryDiscoveryEventStore implements DiscoveryEventStore {
   private readonly eventsById = new Map<string, StoredDiscoveryEvent>();
   private readonly eventIdsBySession = new Map<string, string[]>();
 
-  append(event: DiscoveryEvent): { event: StoredDiscoveryEvent; duplicate: boolean } {
+  async append(event: DiscoveryEvent): Promise<{ event: StoredDiscoveryEvent; duplicate: boolean }> {
     const existing = this.eventsById.get(event.event_id);
     if (existing) return { event: existing, duplicate: true };
-
     const stored: StoredDiscoveryEvent = { ...event, received_at: new Date().toISOString() };
     this.eventsById.set(event.event_id, stored);
     const ids = this.eventIdsBySession.get(event.session_id) ?? [];
@@ -51,7 +44,7 @@ export class InMemoryDiscoveryEventStore implements DiscoveryEventStore {
     return { event: stored, duplicate: false };
   }
 
-  listBySession(sessionId: string): StoredDiscoveryEvent[] {
+  async listBySession(sessionId: string): Promise<StoredDiscoveryEvent[]> {
     return (this.eventIdsBySession.get(sessionId) ?? [])
       .map((id) => this.eventsById.get(id))
       .filter((event): event is StoredDiscoveryEvent => event !== undefined);

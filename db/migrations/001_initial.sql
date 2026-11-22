@@ -1,10 +1,10 @@
 -- PostgreSQL baseline schema for Reverse Screen.
--- Apply with your migration runner; IDs are UUIDs and timestamps are UTC timestamptz.
+-- application_id is text until the shared Application aggregate owns a UUID contract.
 CREATE TABLE IF NOT EXISTS discovery_session (
   session_id uuid PRIMARY KEY,
-  application_id uuid NOT NULL,
+  application_id text NOT NULL CHECK (length(application_id) BETWEEN 1 AND 200),
   platform text NOT NULL CHECK (platform IN ('web', 'android', 'ios', 'hybrid')),
-  target_id text NOT NULL,
+  target_id text NOT NULL CHECK (length(target_id) BETWEEN 1 AND 200),
   status text NOT NULL CHECK (status IN ('created', 'running', 'completed', 'failed', 'cancelled')),
   started_at timestamptz,
   finished_at timestamptz,

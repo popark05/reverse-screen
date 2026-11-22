@@ -1,36 +1,43 @@
 # Reverse Screen
 
-Reverse Screen discovers an application's runtime screen structure and behavior by exploring a running web or mobile application and converting observations into a normalized application model.
+Runtime discovery engine for web, mobile and hybrid applications. Reverse Screen observes running applications and produces normalized screen, state, element, action and transition data for downstream wireflow review and QA authoring.
 
-The initial target is **hybrid mobile**: Android and iOS containers with WebView-based screens and native handoffs such as camera, login, payment, push notifications, and permissions. Web applications are also in scope.
+## Development
 
-## Product responsibilities
-- Discover logical screens, platform-specific screen instances, and meaningful screen states.
-- Observe semantic elements, candidate actions, and state transitions.
-- Capture ordered discovery events and supporting evidence.
-- Build reviewable flow graphs from runtime observations.
-- Preserve provenance: observed, inferred, verified, and human-approved facts remain distinguishable.
+- Node.js 22+
+- PostgreSQL 14+ (optional for local in-memory development)
 
-## Tooling direction
-The runtime integration is adapter-based. Initial candidates are [MobileCLI](https://github.com/mobile-next/mobilecli) and [Mobilewright](https://github.com/mobile-next/mobilewright) for mobile exploration, plus Playwright for web. Adapter-specific objects must not leak into the domain model.
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build
+npm run dev
+```
 
-DOM/WebView inspection is optional, not a prerequisite. The discovery model must also work with accessibility and platform-level observations.
+Without `DATABASE_URL`, the API uses in-memory repositories. To enable PostgreSQL persistence:
 
-## Repository boundaries
-- Wireflow Review owns planning-time flow review.
-- Reverse Screen owns runtime discovery and the application/flow model.
-- [QA Platform](https://github.com/popark05/qa-platform) owns test authoring, execution, and result reporting.
-- Cross-repository integration uses versioned JSON Schema/OpenAPI contracts, never direct writes to another product's database.
+1. Create a database and apply `db/migrations/001_initial.sql`.
+2. Set `DATABASE_URL` to the PostgreSQL connection string.
+3. Start the service with `npm start` (or `npm run dev`).
 
-## Current status
-Architecture baseline is being established. No production database or runtime adapter is configured yet.
+Optional pool setting: `DB_POOL_MAX` (default: 10).
 
-## Design principles
-1. Screen, Screen Instance, and Screen State are separate concepts.
-2. A Flow is not a Test Case.
-3. Discovery is not Test Execution.
-4. Runtime verification and human approval are separate statuses.
-5. Evidence binaries belong in object storage; metadata belongs in the application data store.
+## API
 
-## License
-To be decided before public distribution.
+- `GET /health`
+- `POST /v1/discovery-sessions`
+- `GET /v1/discovery-sessions`
+- `GET /v1/discovery-sessions/:sessionId`
+- `POST /v1/discovery-sessions/:sessionId/transitions`
+- `POST /v1/discovery-sessions/:sessionId/events`
+- `POST /v1/discovery-events`
+
+The PostgreSQL repository persists discovery sessions and events. Event ingestion is idempotent by `event_id`; the database additionally enforces unique sequence numbers within a session. A repeated event ID returns the original stored event. A sequence collision with a different event ID is rejected by PostgreSQL.
+
+## Current boundaries
+
+- Evidence binary storage is not implemented; only evidence IDs are persisted.
+- Authentication, tenant isolation, retention policies and migration orchestration are not implemented.
+- The in-memory mode is intended for tests and local exploration, not multi-process production use.
+- Runtime discovery adapters are separate from persistence and will be added incrementally.
