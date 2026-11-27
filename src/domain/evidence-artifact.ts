@@ -17,15 +17,16 @@ export interface EvidenceArtifact {
 }
 export type CreateEvidenceArtifactInput = Omit<EvidenceArtifact, "evidence_id" | "created_at">;
 export interface EvidenceArtifactStore {
-  create(input: CreateEvidenceArtifactInput): Promise<EvidenceArtifact>;
+  create(input: CreateEvidenceArtifactInput, evidenceId?: string): Promise<EvidenceArtifact>;
   get(evidenceId: string): Promise<EvidenceArtifact | undefined>;
   listBySession(sessionId: string): Promise<EvidenceArtifact[]>;
 }
 
 export class InMemoryEvidenceArtifactStore implements EvidenceArtifactStore {
   private readonly artifacts = new Map<string, EvidenceArtifact>();
-  async create(input: CreateEvidenceArtifactInput): Promise<EvidenceArtifact> {
-    const artifact: EvidenceArtifact = { ...input, evidence_id: randomUUID(), created_at: new Date().toISOString() };
+  async create(input: CreateEvidenceArtifactInput, evidenceId = randomUUID()): Promise<EvidenceArtifact> {
+    if (this.artifacts.has(evidenceId)) throw new Error("Evidence artifact already exists");
+    const artifact: EvidenceArtifact = { ...input, evidence_id: evidenceId, created_at: new Date().toISOString() };
     this.artifacts.set(artifact.evidence_id, artifact);
     return artifact;
   }

@@ -139,12 +139,12 @@ function mapEvidence(row: EvidenceRow): EvidenceArtifact {
 
 export class PostgresEvidenceArtifactRepository implements EvidenceArtifactStore {
   constructor(private readonly pool: Pool) {}
-  async create(input: CreateEvidenceArtifactInput): Promise<EvidenceArtifact> {
+  async create(input: CreateEvidenceArtifactInput, evidenceId = randomUUID()): Promise<EvidenceArtifact> {
     const result = await this.pool.query<EvidenceRow>(
       `INSERT INTO evidence_artifact
        (evidence_id, session_id, event_id, kind, content_type, byte_size, sha256, storage_uri, captured_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [randomUUID(), input.session_id, input.event_id ?? null, input.kind, input.content_type,
+      [evidenceId, input.session_id, input.event_id ?? null, input.kind, input.content_type,
         input.byte_size, input.sha256, input.storage_uri, input.captured_at]
     );
     return mapEvidence(result.rows[0]!);

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   InMemoryDiscoverySessionStore, type DiscoverySession, type DiscoverySessionRepository
@@ -9,6 +10,7 @@ import {
   EVIDENCE_KINDS, InMemoryEvidenceArtifactStore, type CreateEvidenceArtifactInput,
   type EvidenceArtifactStore
 } from "../domain/evidence-artifact.js";
+import type { ObjectStorage } from "../infrastructure/object-storage.js";
 
 const discoveryEventSchema = {
   type: "object", additionalProperties: false,
@@ -45,19 +47,29 @@ const transitionSchema = {
   }
 } as const;
 
+const evidenceMetadataProperties = {
+  session_id: { type: "string", format: "uuid" },
+  event_id: { type: "string", format: "uuid" },
+  kind: { type: "string", enum: EVIDENCE_KINDS },
+  content_type: { type: "string", minLength: 1, maxLength: 200 },
+  byte_size: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+  sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+  captured_at: { type: "string", format: "date-time" }
+} as const;
+
 const createEvidenceSchema = {
   type: "object", additionalProperties: false,
   required: ["session_id", "kind", "content_type", "byte_size", "sha256", "storage_uri", "captured_at"],
   properties: {
-    session_id: { type: "string", format: "uuid" },
-    event_id: { type: "string", format: "uuid" },
-    kind: { type: "string", enum: EVIDENCE_KINDS },
-    content_type: { type: "string", minLength: 1, maxLength: 200 },
-    byte_size: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
-    sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
-    storage_uri: { type: "string", minLength: 1, maxLength: 2048, pattern: "^(s3|gs|https?)://" },
-    captured_at: { type: "string", format: "date-time" }
+    ...evidenceMetadataProperties,
+    storage_uri: { type: "string", minLength: 1, maxLength: 2048, pattern: "^(s3|gs|https?)://" }
   }
+} as const;
+
+const evidenceUploadSchema = {
+  type: "object", additionalProperties: false,
+  required: ["session_id", "kind", "content_type", "byte_size", "sha256", "captured_at"],
+  properties: evidenceMetadataProperties
 } as const;
 
 export interface DiscoveryObserver {
@@ -69,6 +81,10 @@ export interface AppOptions {
   sessions?: DiscoverySessionRepository;
   evidence?: EvidenceArtifactStore;
   observer?: DiscoveryObserver;
+  objectStorage?: ObjectStorage;
+  objectStorageBucket?: string;
+  uploadUrlTtlSeconds?: number;
+  downloadUrlTtlSeconds?: number;
   onClose?: () => Promise<void>;
 }
 
@@ -77,6 +93,9 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const store = options.store ?? new InMemoryDiscoveryEventStore();
   const sessions = options.sessions ?? new InMemoryDiscoverySessionStore();
   const evidence = options.evidence ?? new InMemoryEvidenceArtifactStore();
+  const uploadTtl = options.uploadUrlTtlSeconds ?? 300;
+  const downloadTtl = options.downloadUrlTtlSeconds ?? 300;
+  const bucket = options.objectStorageBucket ?? "reverse-screen";
 
   app.addHook("onClose", async () => {
     await options.observer?.close?.();
@@ -139,6 +158,77 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       return reply.code(201).send(artifact);
     }
   );
+
+  app.post<{ Body: Omit<CreateEvidenceArtifactInput, "storage_uri"> }>(
+    "/v1/evidence-artifacts/upload-url", { schema: { body: evidenceUploadSchema } },
+    async (request, reply) => {
+      if (!options.objectStorage) return reply.code(501).send({ error: "object_storage_not_configured" });
+      const session = await sessions.get(request.body.session_id);
+      if (!session) return reply.code(404).send({ error: "discovery_session_not_found" });
+      const evidenceId = randomUUID();
+      const key = `evidence/${request.body.session_id}/${evidenceId}`;
+      try {
+        const signed = await options.objectStorage.createUploadUrl({
+          key, contentType: request.body.content_type, sha256: request.body.sha256, expiresInSeconds: uploadTtl
+        });
+        return reply.code(201).send({
+          evidence_id: evidenceId, method: "PUT", upload_url: signed.url,
+          required_headers: signed.headers, storage_uri: `s3://${bucket}/${key}`,
+          expires_in_seconds: uploadTtl
+        });
+      } catch (error) {
+        request.log.error(error);
+        return reply.code(502).send({ error: "evidence_upload_url_failed" });
+      }
+    }
+  );
+
+  app.post<{ Params: { evidenceId: string }; Body: Omit<CreateEvidenceArtifactInput, "storage_uri"> }>(
+    "/v1/evidence-artifacts/:evidenceId/confirm", { schema: { body: evidenceUploadSchema } },
+    async (request, reply) => {
+      if (!options.objectStorage) return reply.code(501).send({ error: "object_storage_not_configured" });
+      const session = await sessions.get(request.body.session_id);
+      if (!session) return reply.code(404).send({ error: "discovery_session_not_found" });
+      const key = `evidence/${request.body.session_id}/${request.params.evidenceId}`;
+      try {
+        const head = await options.objectStorage.headObject(key);
+        if (!head) return reply.code(409).send({ error: "evidence_object_not_uploaded" });
+        const expectedChecksum = Buffer.from(request.body.sha256, "hex").toString("base64");
+        if (head.byteSize !== request.body.byte_size ||
+            head.contentType !== request.body.content_type ||
+            head.sha256 !== expectedChecksum) {
+          return reply.code(422).send({ error: "evidence_object_metadata_mismatch" });
+        }
+        const artifact = await evidence.create({
+          ...request.body, storage_uri: `s3://${bucket}/${key}`
+        }, request.params.evidenceId);
+        return reply.code(201).send(artifact);
+      } catch (error) {
+        if (error instanceof Error && error.message === "Evidence artifact already exists") {
+          return reply.code(409).send({ error: "evidence_artifact_already_confirmed" });
+        }
+        request.log.error(error);
+        return reply.code(502).send({ error: "evidence_upload_confirmation_failed" });
+      }
+    }
+  );
+
+  app.get<{ Params: { evidenceId: string } }>("/v1/evidence-artifacts/:evidenceId/download-url", async (request, reply) => {
+    if (!options.objectStorage) return reply.code(501).send({ error: "object_storage_not_configured" });
+    const artifact = await evidence.get(request.params.evidenceId);
+    if (!artifact) return reply.code(404).send({ error: "evidence_artifact_not_found" });
+    const prefix = `s3://${bucket}/`;
+    if (!artifact.storage_uri.startsWith(prefix)) return reply.code(409).send({ error: "unsupported_evidence_storage_uri" });
+    const key = artifact.storage_uri.slice(prefix.length);
+    try {
+      const downloadUrl = await options.objectStorage.createDownloadUrl(key, downloadTtl);
+      return { evidence_id: artifact.evidence_id, download_url: downloadUrl, expires_in_seconds: downloadTtl };
+    } catch (error) {
+      request.log.error(error);
+      return reply.code(502).send({ error: "evidence_download_url_failed" });
+    }
+  });
+
   app.get<{ Params: { evidenceId: string } }>("/v1/evidence-artifacts/:evidenceId", async (request, reply) => {
     const artifact = await evidence.get(request.params.evidenceId);
     if (!artifact) return reply.code(404).send({ error: "evidence_artifact_not_found" });

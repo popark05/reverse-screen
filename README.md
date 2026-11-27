@@ -8,6 +8,7 @@ Runtime discovery engine for web, mobile and hybrid applications. Reverse Screen
 - PostgreSQL 14+ (optional for local in-memory development)
 - Playwright for web discovery
 - Mobilewright for native Android/iOS and embedded WebView discovery
+- S3-compatible Object Storage for binary evidence (optional)
 
 ```bash
 npm install
@@ -55,17 +56,94 @@ POST /v1/discovery-sessions/{sessionId}/observe
 
 The endpoint moves the session through `created -> running -> completed`, stores normalized events, and marks the session failed if observation fails. A native-only app simply produces no WebView events. `MOBILE_DISCOVERY_MAX_ELEMENTS` bounds native elements (default 300); `MOBILE_DISCOVERY_MAX_WEBVIEW_ELEMENTS` bounds semantic WebView elements (default 200).
 
-## Evidence artifact metadata
+## Evidence Object Storage
 
-Binary evidence belongs in an object store; PostgreSQL stores only metadata and a stable object URI. The current increment adds the metadata contract and repository/API, but does not yet upload binary bytes or issue signed upload/download URLs.
+Evidence binaries are stored in an S3-compatible object store; PostgreSQL stores only metadata and the stable `s3://bucket/key` URI. The API issues short-lived presigned URLs so clients upload/download bytes directly without routing binary payloads through the API server.
 
-Supported kinds: `screenshot`, `video`, `dom_snapshot`, `accessibility_tree`, `log`, `network_trace`.
+### Configuration
 
-- `POST /v1/evidence-artifacts` — register metadata after the object has been uploaded
+Set `S3_BUCKET` to enable the storage endpoints. AWS credentials use the standard SDK credential provider chain unless explicit credentials are supplied.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `S3_BUCKET` | unset | Enables S3 storage and names the bucket |
+| `S3_REGION` | `us-east-1` | AWS region / S3-compatible region |
+| `S3_ENDPOINT` | unset | Optional custom endpoint, e.g. MinIO |
+| `S3_ACCESS_KEY_ID` | unset | Optional explicit access key |
+| `S3_SECRET_ACCESS_KEY` | unset | Optional explicit secret |
+| `S3_FORCE_PATH_STYLE` | `false` | Set `true` for MinIO/path-style endpoints |
+| `S3_PRESIGN_TTL_SECONDS` | `300` | Upload URL lifetime |
+| `S3_DOWNLOAD_TTL_SECONDS` | `300` | Download URL lifetime |
+
+Example MinIO configuration:
+
+```bash
+S3_BUCKET=reverse-screen \
+S3_ENDPOINT=http://localhost:9000 \
+S3_REGION=us-east-1 \
+S3_ACCESS_KEY_ID=minioadmin \
+S3_SECRET_ACCESS_KEY=minioadmin \
+S3_FORCE_PATH_STYLE=true \
+npm start
+```
+
+The bucket must exist before the API starts. Configure bucket CORS to permit browser clients to send `PUT` requests with the returned `Content-Type` and `x-amz-checksum-sha256` headers.
+
+### Upload protocol
+
+1. Request an upload URL with evidence metadata.
+2. Upload the raw bytes directly to the returned URL using the exact returned headers.
+3. Confirm the upload. The API performs `HeadObject` and verifies byte size, content type and the S3 SHA-256 checksum before registering metadata.
+
+```http
+POST /v1/evidence-artifacts/upload-url
+Content-Type: application/json
+
+{
+  "session_id": "discovery-session-uuid",
+  "kind": "screenshot",
+  "content_type": "image/png",
+  "byte_size": 1024,
+  "sha256": "<64-character lowercase SHA-256 hex>",
+  "captured_at": "2026-11-27T00:00:00.000Z"
+}
+```
+
+The response contains `evidence_id`, `upload_url`, `method: "PUT"`, `required_headers`, stable `storage_uri`, and URL lifetime. The client must send the returned headers unchanged when uploading.
+
+After the PUT succeeds:
+
+```http
+POST /v1/evidence-artifacts/{evidenceId}/confirm
+Content-Type: application/json
+
+{
+  "session_id": "discovery-session-uuid",
+  "kind": "screenshot",
+  "content_type": "image/png",
+  "byte_size": 1024,
+  "sha256": "<same SHA-256 hex>",
+  "captured_at": "2026-11-27T00:00:00.000Z"
+}
+```
+
+Only a verified object is registered as an EvidenceArtifact. A missing object returns `409`; mismatched size, content type or checksum returns `422`. The evidence ID returned during URL creation is the ID used for confirmation.
+
+### Download protocol
+
+```http
+GET /v1/evidence-artifacts/{evidenceId}/download-url
+```
+
+Returns a short-lived `download_url`. The API persists neither presigned URL; only the stable `s3://bucket/key` URI is stored.
+
+### Metadata-only compatibility API
+
+- `POST /v1/evidence-artifacts` — register externally uploaded metadata (legacy/integration path)
 - `GET /v1/evidence-artifacts/:evidenceId` — retrieve metadata
 - `GET /v1/discovery-sessions/:sessionId/evidence` — list session evidence
 
-Metadata includes `session_id`, optional `event_id`, `kind`, `content_type`, `byte_size`, SHA-256 checksum, stable `storage_uri`, and `captured_at`. The API validates the checksum format and storage URI scheme and verifies that the discovery session exists.
+Supported kinds: `screenshot`, `video`, `dom_snapshot`, `accessibility_tree`, `log`, `network_trace`.
 
 ## API
 
@@ -75,8 +153,11 @@ Metadata includes `session_id`, optional `event_id`, `kind`, `content_type`, `by
 - `GET /v1/discovery-sessions/:sessionId`
 - `POST /v1/discovery-sessions/:sessionId/observe` (when an observer is configured)
 - `POST /v1/discovery-sessions/:sessionId/transitions`
-- `POST /v1/discovery-sessions/:sessionId/events`
+- `POST /v1/discovery-events`
 - `GET /v1/discovery-sessions/:sessionId/events`
+- `POST /v1/evidence-artifacts/upload-url`
+- `POST /v1/evidence-artifacts/:evidenceId/confirm`
+- `GET /v1/evidence-artifacts/:evidenceId/download-url`
 - `POST /v1/evidence-artifacts`
 - `GET /v1/evidence-artifacts/:evidenceId`
 - `GET /v1/discovery-sessions/:sessionId/evidence`
@@ -85,9 +166,11 @@ Event ingestion is idempotent by `event_id`; PostgreSQL additionally enforces un
 
 ## Current boundaries
 
-- Evidence binary upload, object-store lifecycle, signed URLs and retention are not implemented; only metadata persistence is implemented.
-- DOM snapshot contents are not stored by this adapter; only their SHA-256 digest and summary metadata are emitted.
-- Authentication, tenant isolation and migration orchestration are not implemented.
+- S3-compatible binary upload/download uses presigned URLs; actual client-side upload and download must be performed by the caller.
+- SHA-256 verification depends on the object store returning the S3 `ChecksumSHA256` field from `HeadObject`; the implementation rejects objects where that checksum is unavailable.
+- Authentication, tenant isolation, authorization for session ownership, bucket lifecycle/retention policies and migration orchestration are not implemented.
+- The upload URL itself is not persisted as an upload-intent record. Confirmation is bound to the generated evidence ID and session-scoped object key, but callers still require authenticated access control before production exposure.
+- DOM snapshot contents are not stored by the Mobilewright adapter; only their SHA-256 digest and summary metadata are emitted.
 - Hybrid native/WebView discovery is observational; coordinated actions and transitions between the two contexts are not yet generated.
 - In-memory mode is intended for tests/local exploration, not multi-process production use.
 - Real-device and simulator E2E validation is still required; CI currently covers fake-driver/unit tests.

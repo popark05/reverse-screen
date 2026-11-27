@@ -1,6 +1,6 @@
 {
   "name": "@popark05/reverse-screen",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": false,
   "description": "Runtime discovery engine for web, mobile and hybrid application screens and flows.",
   "type": "module",
@@ -12,7 +12,14 @@
     "test": "tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": { "fastify": "^5.2.1", "mobilewright": "0.0.70", "pg": "^8.13.3", "playwright": "^1.55.0" },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.922.0",
+    "@aws-sdk/s3-request-presigner": "^3.922.0",
+    "fastify": "^5.2.1",
+    "mobilewright": "0.0.70",
+    "pg": "^8.13.3",
+    "playwright": "^1.55.0"
+  },
   "devDependencies": {
     "@types/node": "^22.13.4",
     "@types/pg": "^8.11.11",
