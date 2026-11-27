@@ -80,3 +80,29 @@ test("Mobilewright discovery rejects unsupported platforms and requires bundle i
   await assert.rejects(() => adapter.observe({ ...session, platform: "web" }), /mobilewright_discovery_platform_unsupported:web/);
   assert.throws(() => new MobilewrightDiscoveryAdapter({ bundleId: " " }), /MOBILE_APP_BUNDLE_ID is required/);
 });
+
+test("observeWithEvidence captures a PNG screenshot and associates it with the native screen event", async () => {
+  const screenshot = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  let screenshotCalls = 0;
+  const device = {
+    id: "emulator-5554",
+    screen: {
+      viewTree: async () => [],
+      getByWebView: () => ({ count: async () => 0 }),
+      screenshot: async () => { screenshotCalls++; return screenshot; }
+    },
+    getForegroundApp: async () => ({ bundleId: "com.example.app" }),
+    screenSize: async () => ({ width: 1, height: 1, scale: 1 }),
+    close: async () => {}
+  };
+  const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "com.example.app" }, {
+    ios: { launch: async () => device as never }, android: { launch: async () => device as never }
+  });
+  const result = await adapter.observeWithEvidence(session);
+  assert.equal(screenshotCalls, 1);
+  assert.equal(result.evidence.length, 1);
+  assert.equal(result.evidence[0]?.kind, "screenshot");
+  assert.equal(result.evidence[0]?.content_type, "image/png");
+  assert.deepEqual(result.evidence[0]?.bytes, screenshot);
+  assert.equal(result.evidence[0]?.event_id, result.events[0]?.event_id);
+});

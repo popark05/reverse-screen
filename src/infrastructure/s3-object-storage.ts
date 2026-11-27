@@ -2,7 +2,7 @@ import {
   HeadObjectCommand, PutObjectCommand, GetObjectCommand, S3Client
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import type { ObjectStorage, CreateUploadUrlInput, ObjectHead } from "./object-storage.js";
+import type { ObjectStorage, CreateUploadUrlInput, PutObjectInput, ObjectHead } from "./object-storage.js";
 
 export interface S3ObjectStorageOptions {
   bucket: string;
@@ -29,10 +29,7 @@ export class S3ObjectStorage implements ObjectStorage {
   async createUploadUrl(input: CreateUploadUrlInput): Promise<{ url: string; headers: Record<string, string> }> {
     const checksum = Buffer.from(input.sha256, "hex").toString("base64");
     const command = new PutObjectCommand({
-      Bucket: this.options.bucket,
-      Key: input.key,
-      ContentType: input.contentType,
-      ChecksumSHA256: checksum
+      Bucket: this.options.bucket, Key: input.key, ContentType: input.contentType, ChecksumSHA256: checksum
     });
     const url = await getSignedUrl(this.client, command, {
       expiresIn: input.expiresInSeconds,
@@ -43,6 +40,14 @@ export class S3ObjectStorage implements ObjectStorage {
       url,
       headers: { "content-type": input.contentType, "x-amz-checksum-sha256": checksum }
     };
+  }
+
+  async putObject(input: PutObjectInput): Promise<void> {
+    const checksum = Buffer.from(input.sha256, "hex").toString("base64");
+    await this.client.send(new PutObjectCommand({
+      Bucket: this.options.bucket, Key: input.key, Body: input.body,
+      ContentType: input.contentType, ChecksumSHA256: checksum
+    }));
   }
 
   async headObject(key: string): Promise<ObjectHead | undefined> {

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { android, ios } from "mobilewright";
+import type { CapturedEvidence } from "../domain/evidence-artifact.js";
 import type { DiscoveryEvent, Platform } from "../domain/discovery-event.js";
 import type { DiscoverySession } from "../domain/discovery-session.js";
 
@@ -62,10 +63,13 @@ export interface MobilewrightDiscoveryOptions {
   maxElements?: number;
   maxWebViewElements?: number;
 }
+export interface MobilewrightDiscoveryResult {
+  events: DiscoveryEvent[];
+  evidence: CapturedEvidence[];
+}
 
 interface FlattenedNode { node: ViewNode; depth: number; parentKey?: string; elementKey: string; }
 const WEB_ROLES = ["button", "link", "textbox", "checkbox", "radio", "switch", "tab", "heading", "img", "listitem", "combobox", "option", "alert", "dialog", "menuitem"];
-
 function stableKey(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 20);
 }
@@ -115,6 +119,14 @@ export class MobilewrightDiscoveryAdapter {
   }
 
   async observe(session: DiscoverySession): Promise<DiscoveryEvent[]> {
+    return (await this.observeInternal(session, false)).events;
+  }
+
+  async observeWithEvidence(session: DiscoverySession): Promise<MobilewrightDiscoveryResult> {
+    return this.observeInternal(session, true);
+  }
+
+  private async observeInternal(session: DiscoverySession, captureEvidence: boolean): Promise<MobilewrightDiscoveryResult> {
     if (session.platform !== "ios" && session.platform !== "android") {
       throw new Error(`mobilewright_discovery_platform_unsupported:${session.platform}`);
     }
@@ -137,6 +149,13 @@ export class MobilewrightDiscoveryAdapter {
         events.push({ ...input, event_id: randomUUID(), session_id: session.session_id, sequence: ++sequence, platform: session.platform as Platform });
       };
 
+      let screenshot: Buffer | undefined;
+      let screenshotError: string | undefined;
+      if (captureEvidence) {
+        try { screenshot = await device.screen.screenshot(); }
+        catch (error) { screenshotError = error instanceof Error ? error.message : String(error); }
+      }
+
       const maxElements = this.options.maxElements ?? 300;
       const flattened = flattenTree(tree, maxElements);
       const nativeScreenId = randomUUID();
@@ -152,6 +171,16 @@ export class MobilewrightDiscoveryAdapter {
           ...(size ? { screen_size: size } : {}), observation_source: "mobilewright_accessibility_tree"
         }
       });
+      const nativeScreenEvent = events[0]!;
+      const evidence: CapturedEvidence[] = screenshot ? [{
+        kind: "screenshot", content_type: "image/png", bytes: screenshot,
+        captured_at: observedAt, event_id: nativeScreenEvent.event_id
+      }] : [];
+      if (screenshotError) addEvent({
+        event_type: "error", occurred_at: observedAt,
+        payload: { context_type: "native", operation: "screenshot", error: screenshotError }
+      });
+
       for (const { node, depth, parentKey, elementKey } of flattened) {
         const role = inferRole(node);
         const label = node.label?.trim() ?? "";
@@ -182,7 +211,7 @@ export class MobilewrightDiscoveryAdapter {
       }
 
       await this.observeWebViews(device, session, observedAt, addEvent);
-      return events;
+      return { events, evidence };
     } finally {
       await device.close();
     }

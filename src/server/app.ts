@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   InMemoryDiscoverySessionStore, type DiscoverySession, type DiscoverySessionRepository
@@ -7,7 +7,7 @@ import {
   InMemoryDiscoveryEventStore, type DiscoveryEvent, type DiscoveryEventStore
 } from "../domain/discovery-event.js";
 import {
-  EVIDENCE_KINDS, InMemoryEvidenceArtifactStore, type CreateEvidenceArtifactInput,
+  EVIDENCE_KINDS, InMemoryEvidenceArtifactStore, type CapturedEvidence, type CreateEvidenceArtifactInput,
   type EvidenceArtifactStore
 } from "../domain/evidence-artifact.js";
 import type { ObjectStorage } from "../infrastructure/object-storage.js";
@@ -72,8 +72,13 @@ const evidenceUploadSchema = {
   properties: evidenceMetadataProperties
 } as const;
 
+export interface DiscoveryObservation {
+  events: DiscoveryEvent[];
+  evidence: CapturedEvidence[];
+}
 export interface DiscoveryObserver {
   observe(session: DiscoverySession): Promise<DiscoveryEvent[]>;
+  observeWithEvidence?(session: DiscoverySession): Promise<DiscoveryObservation>;
   close?(): Promise<void>;
 }
 export interface AppOptions {
@@ -85,6 +90,7 @@ export interface AppOptions {
   objectStorageBucket?: string;
   uploadUrlTtlSeconds?: number;
   downloadUrlTtlSeconds?: number;
+  maxEvidenceBytes?: number;
   onClose?: () => Promise<void>;
 }
 
@@ -95,6 +101,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const evidence = options.evidence ?? new InMemoryEvidenceArtifactStore();
   const uploadTtl = options.uploadUrlTtlSeconds ?? 300;
   const downloadTtl = options.downloadUrlTtlSeconds ?? 300;
+  const maxEvidenceBytes = options.maxEvidenceBytes ?? 20 * 1024 * 1024;
   const bucket = options.objectStorageBucket ?? "reverse-screen";
 
   app.addHook("onClose", async () => {
@@ -121,11 +128,52 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     const running = await sessions.transition(current.session_id, "running");
     if (!running) return reply.code(409).send({ error: "invalid_session_transition" });
     try {
-      const events = await options.observer.observe(running);
+      let events: DiscoveryEvent[];
+      let captured: CapturedEvidence[] = [];
+      if (options.objectStorage && options.observer.observeWithEvidence) {
+        const observation = await options.observer.observeWithEvidence(running);
+        events = observation.events;
+        captured = observation.evidence;
+      } else {
+        events = await options.observer.observe(running);
+      }
+
+      for (const item of captured) {
+        if (item.bytes.byteLength === 0 || item.bytes.byteLength > maxEvidenceBytes) {
+          throw new Error(`evidence_size_out_of_range:${item.bytes.byteLength}`);
+        }
+        const evidenceId = randomUUID();
+        const key = `evidence/${running.session_id}/${evidenceId}`;
+        const sha256 = createHash("sha256").update(item.bytes).digest("hex");
+        await options.objectStorage!.putObject({
+          key, body: item.bytes, contentType: item.content_type, sha256
+        });
+        const head = await options.objectStorage!.headObject(key);
+        const expectedChecksum = Buffer.from(sha256, "hex").toString("base64");
+        if (!head || head.byteSize !== item.bytes.byteLength ||
+            head.contentType !== item.content_type || head.sha256 !== expectedChecksum) {
+          throw new Error("captured_evidence_object_verification_failed");
+        }
+        const artifactInput: CreateEvidenceArtifactInput = {
+          session_id: running.session_id,
+          ...(item.event_id ? { event_id: item.event_id } : {}),
+          kind: item.kind, content_type: item.content_type, byte_size: item.bytes.byteLength,
+          sha256, storage_uri: `s3://${bucket}/${key}`, captured_at: item.captured_at
+        };
+        const artifact = await evidence.create(artifactInput, evidenceId);
+        if (item.event_id) {
+          const event = events.find((candidate) => candidate.event_id === item.event_id);
+          if (event) event.evidence_ids = [...(event.evidence_ids ?? []), artifact.evidence_id];
+        }
+      }
+
       const accepted = [];
       for (const event of events) accepted.push(await store.append(event));
       const completed = await sessions.transition(current.session_id, "completed");
-      return reply.code(201).send({ session: completed, accepted_count: accepted.length, events: accepted.map((item) => item.event) });
+      return reply.code(201).send({
+        session: completed, accepted_count: accepted.length,
+        evidence_count: captured.length, events: accepted.map((item) => item.event)
+      });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await sessions.transition(current.session_id, "failed", reason.slice(0, 2000));

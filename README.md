@@ -54,11 +54,11 @@ npm start
 POST /v1/discovery-sessions/{sessionId}/observe
 ```
 
-The endpoint moves the session through `created -> running -> completed`, stores normalized events, and marks the session failed if observation fails. A native-only app simply produces no WebView events. `MOBILE_DISCOVERY_MAX_ELEMENTS` bounds native elements (default 300); `MOBILE_DISCOVERY_MAX_WEBVIEW_ELEMENTS` bounds semantic WebView elements (default 200).
+The endpoint moves the session through `created -> running -> completed` and stores normalized events. When `S3_BUCKET` is configured, it also captures a PNG screenshot through `screen.screenshot()`, uploads it to Object Storage, verifies the stored checksum/size/content type, registers the EvidenceArtifact, and adds its ID to the native `screen_observed` event. Set `MOBILE_DISCOVERY_MAX_EVIDENCE_BYTES` to cap screenshot size (default 20 MiB). If evidence storage fails, the observation is marked failed. A native-only app simply produces no WebView events. `MOBILE_DISCOVERY_MAX_ELEMENTS` bounds native elements (default 300); `MOBILE_DISCOVERY_MAX_WEBVIEW_ELEMENTS` bounds semantic WebView elements (default 200).
 
 ## Evidence Object Storage
 
-Evidence binaries are stored in an S3-compatible object store; PostgreSQL stores only metadata and the stable `s3://bucket/key` URI. The API issues short-lived presigned URLs so clients upload/download bytes directly without routing binary payloads through the API server.
+Evidence binaries are stored in an S3-compatible object store; PostgreSQL stores only metadata and the stable `s3://bucket/key` URI. The API issues short-lived presigned URLs so clients upload/download bytes directly without routing client payloads through the API server. When Mobilewright discovery is enabled together with S3 storage, the adapter captures a native PNG screenshot and the discovery API uploads it server-side, verifies its checksum, registers EvidenceArtifact metadata, and links the evidence ID to the corresponding native screen event.
 
 ### Configuration
 
@@ -166,11 +166,11 @@ Event ingestion is idempotent by `event_id`; PostgreSQL additionally enforces un
 
 ## Current boundaries
 
-- S3-compatible binary upload/download uses presigned URLs; actual client-side upload and download must be performed by the caller.
+- Client-originated evidence uses presigned upload/download URLs. Mobilewright discovery can additionally upload its captured native screenshot from the API process; Playwright web discovery does not yet capture screenshots through this evidence pipeline.
 - SHA-256 verification depends on the object store returning the S3 `ChecksumSHA256` field from `HeadObject`; the implementation rejects objects where that checksum is unavailable.
 - Authentication, tenant isolation, authorization for session ownership, bucket lifecycle/retention policies and migration orchestration are not implemented.
 - The upload URL itself is not persisted as an upload-intent record. Confirmation is bound to the generated evidence ID and session-scoped object key, but callers still require authenticated access control before production exposure.
-- DOM snapshot contents are not stored by the Mobilewright adapter; only their SHA-256 digest and summary metadata are emitted.
+- Mobilewright native screenshot capture is implemented; video recording and persisted raw DOM snapshots are not yet integrated. DOM snapshot contents are not stored by the adapter; only their SHA-256 digest and summary metadata are emitted.
 - Hybrid native/WebView discovery is observational; coordinated actions and transitions between the two contexts are not yet generated.
 - In-memory mode is intended for tests/local exploration, not multi-process production use.
 - Real-device and simulator E2E validation is still required; CI currently covers fake-driver/unit tests.

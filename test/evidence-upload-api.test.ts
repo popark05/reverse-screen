@@ -9,6 +9,9 @@ class FakeObjectStorage implements ObjectStorage {
     this.objects.set(input.key, { byteSize: 1234, contentType: input.contentType, sha256: Buffer.from(input.sha256, "hex").toString("base64") });
     return { url: `https://storage.example.test/${input.key}?signature=fake`, headers: { "content-type": input.contentType, "x-amz-checksum-sha256": Buffer.from(input.sha256, "hex").toString("base64") } };
   }
+  async putObject(input: { key: string; body: Uint8Array; contentType: string; sha256: string }) {
+    this.objects.set(input.key, { byteSize: input.body.byteLength, contentType: input.contentType, sha256: Buffer.from(input.sha256, "hex").toString("base64") });
+  }
   async headObject(key: string) { return this.objects.get(key); }
   async createDownloadUrl(key: string) { return `https://storage.example.test/${key}?download=fake`; }
 }
@@ -67,7 +70,7 @@ test("evidence confirmation rejects missing or mismatched uploaded objects", asy
   });
   assert.equal(mismatch.statusCode, 422);
   const missing = await app.inject({
-    method: "POST", url: `/v1/evidence-artifacts/00000000-0000-4000-8000-000000000000/confirm`,
+    method: "POST", url: "/v1/evidence-artifacts/00000000-0000-4000-8000-000000000000/confirm",
     payload: { session_id: sessionId, kind: "log", content_type: "text/plain", byte_size: 1234, sha256, captured_at: "2026-11-27T00:00:00.000Z" }
   });
   assert.equal(missing.statusCode, 409);

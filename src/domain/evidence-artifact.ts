@@ -15,6 +15,13 @@ export interface EvidenceArtifact {
   captured_at: string;
   created_at: string;
 }
+export interface CapturedEvidence {
+  kind: EvidenceKind;
+  content_type: string;
+  bytes: Uint8Array;
+  captured_at: string;
+  event_id?: string;
+}
 export type CreateEvidenceArtifactInput = Omit<EvidenceArtifact, "evidence_id" | "created_at">;
 export interface EvidenceArtifactStore {
   create(input: CreateEvidenceArtifactInput, evidenceId?: string): Promise<EvidenceArtifact>;

@@ -4,6 +4,12 @@ export interface CreateUploadUrlInput {
   sha256: string;
   expiresInSeconds: number;
 }
+export interface PutObjectInput {
+  key: string;
+  body: Uint8Array;
+  contentType: string;
+  sha256: string;
+}
 export interface ObjectHead {
   byteSize: number;
   contentType?: string;
@@ -11,6 +17,7 @@ export interface ObjectHead {
 }
 export interface ObjectStorage {
   createUploadUrl(input: CreateUploadUrlInput): Promise<{ url: string; headers: Record<string, string> }>;
+  putObject(input: PutObjectInput): Promise<void>;
   headObject(key: string): Promise<ObjectHead | undefined>;
   createDownloadUrl(key: string, expiresInSeconds: number): Promise<string>;
 }
