@@ -7,7 +7,7 @@ import { buildApp } from "../src/server/app.js";
 
 class RecordingStorage implements ObjectStorage {
   readonly objects = new Map<string, { bytes: Uint8Array; contentType: string; sha256: string }>();
-  async createUploadUrl() { throw new Error("not used"); }
+  async createUploadUrl() { return { url: "https://unused.example.test/upload", headers: {} }; }
   async putObject(input: { key: string; body: Uint8Array; contentType: string; sha256: string }) {
     this.objects.set(input.key, { bytes: input.body, contentType: input.contentType, sha256: Buffer.from(input.sha256, "hex").toString("base64") });
   }
