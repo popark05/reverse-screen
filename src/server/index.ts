@@ -49,7 +49,7 @@ const app = buildApp({
   ...(observer ? { observer } : {}),
   ...(objectStorage ? {
     objectStorage,
-    objectStorageBucket: s3Bucket,
+    objectStorageBucket: s3Bucket!,
     uploadUrlTtlSeconds: Number(process.env.S3_PRESIGN_TTL_SECONDS ?? 300),
     downloadUrlTtlSeconds: Number(process.env.S3_DOWNLOAD_TTL_SECONDS ?? 300)
   } : {}),
