@@ -75,7 +75,7 @@
     "payload": {
       "type": "object",
       "additionalProperties": true,
-      "description": "Event-specific metadata. Hybrid context attachment transitions use transition_kind=context_attachment and explicitly set navigation_verified=false."
+      "description": "Event-specific metadata. Hybrid context attachment, persistence, and detachment transitions use transition_kind=context_attachment|context_persisted|context_detachment and explicitly set navigation_verified=false; lifecycle observations do not establish navigation causality."
     },
     "evidence_ids": {
       "type": "array",
