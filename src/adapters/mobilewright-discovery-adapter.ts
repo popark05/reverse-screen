@@ -192,8 +192,11 @@ export class MobilewrightDiscoveryAdapter {
         event_type: "action_executed",
         occurred_at: new Date().toISOString(),
         platform: session.platform as Platform,
+        ...(request.screen_id ? { screen_id: request.screen_id } : {}),
+        ...(request.state_id ? { state_id: request.state_id } : {}),
         payload: {
           context_type: request.context_type,
+          ...(request.target_element_key ? { target_element_key: request.target_element_key } : {}),
           action: request.action,
           locator_strategy: request.locator_strategy,
           ...(request.locator_value ? { locator_value: request.locator_value } : {}),
