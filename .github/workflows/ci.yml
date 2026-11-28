@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, feat/playwright-screenshot-evidence, feat/hybrid-context-transitions]
+    branches: [main, feat/playwright-screenshot-evidence, feat/hybrid-context-transitions, feat/hybrid-action-execution]
 
 jobs:
   verify:
