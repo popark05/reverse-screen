@@ -3,6 +3,7 @@ import { android, ios } from "mobilewright";
 import type { CapturedEvidence } from "../domain/evidence-artifact.js";
 import type { DiscoveryEvent, Platform } from "../domain/discovery-event.js";
 import type { DiscoverySession } from "../domain/discovery-session.js";
+import { HybridContextLifecycleTracker } from "../domain/hybrid-context-lifecycle.js";
 
 interface ViewNode {
   type: string;
@@ -69,6 +70,18 @@ export interface MobilewrightDiscoveryResult {
 }
 
 interface FlattenedNode { node: ViewNode; depth: number; parentKey?: string; elementKey: string; }
+interface WebViewContextObservation {
+  contextKey: string;
+  screenId: string;
+  stateId: string;
+  webViewIndex: number;
+  url: string;
+  title: string;
+}
+interface WebViewObservationResult {
+  contexts: WebViewContextObservation[];
+  complete: boolean;
+}
 const WEB_ROLES = ["button", "link", "textbox", "checkbox", "radio", "switch", "tab", "heading", "img", "listitem", "combobox", "option", "alert", "dialog", "menuitem"];
 function stableKey(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 20);
@@ -114,6 +127,7 @@ function isActionable(node: ViewNode, role: string): boolean {
 }
 
 export class MobilewrightDiscoveryAdapter {
+  private readonly hybridContextLifecycle = new HybridContextLifecycleTracker();
   constructor(private readonly options: MobilewrightDiscoveryOptions, private readonly factory: LauncherFactory = defaultFactory) {
     if (!options.bundleId.trim()) throw new Error("MOBILE_APP_BUNDLE_ID is required");
   }
@@ -215,7 +229,92 @@ export class MobilewrightDiscoveryAdapter {
         });
       }
 
-      await this.observeWebViews(device, session, observedAt, nativeScreenId, nativeStateId, addEvent);
+      const webViewObservation = await this.observeWebViews(device, session, observedAt, addEvent);
+      if (webViewObservation?.complete) {
+        const lifecycle = this.hybridContextLifecycle.reconcile(
+          session.session_id, observedAt, nativeScreenId, nativeStateId, webViewObservation.contexts
+        );
+        for (const item of lifecycle.active) {
+          const screenEvent = events.find((event) =>
+            event.event_type === "screen_observed" && event.screen_id === item.context.screenId
+          );
+          if (screenEvent) {
+            screenEvent.transition_id = item.lifecycle.transitionId;
+            screenEvent.payload.context_key = item.context.contextKey;
+            screenEvent.payload.context_lifecycle = {
+              status: "active",
+              transition_id: item.lifecycle.transitionId,
+              first_seen_at: item.lifecycle.firstSeenAt,
+              last_seen_at: item.lifecycle.lastSeenAt,
+              observation_count: item.lifecycle.observationCount,
+              first_observation_number: item.lifecycle.firstObservationNumber,
+              last_observation_number: item.lifecycle.lastObservationNumber
+            };
+          }
+          if (item.isNew) addEvent({
+            event_type: "transition_observed",
+            screen_id: nativeScreenId,
+            state_id: nativeStateId,
+            transition_id: item.lifecycle.transitionId,
+            occurred_at: observedAt,
+            payload: {
+              context_type: "hybrid",
+              transition_kind: "context_attachment",
+              direction: "native_to_webview",
+              source_context_type: "native",
+              target_context_type: "webview",
+              source_screen_id: nativeScreenId,
+              source_state_id: nativeStateId,
+              target_screen_id: item.context.screenId,
+              target_state_id: item.context.stateId,
+              webview_index: item.context.webViewIndex,
+              relationship: "embedded_context",
+              navigation_verified: false,
+              observation_source: "mobilewright_webview_attachment",
+              context_lifecycle: {
+                status: "active",
+                first_seen_at: item.lifecycle.firstSeenAt,
+                last_seen_at: item.lifecycle.lastSeenAt,
+                observation_count: item.lifecycle.observationCount,
+                observation_number: lifecycle.observationNumber
+              }
+            }
+          });
+        }
+        for (const item of lifecycle.detached) addEvent({
+          event_type: "transition_observed",
+          screen_id: nativeScreenId,
+          state_id: nativeStateId,
+          transition_id: item.lifecycle.transitionId,
+          occurred_at: observedAt,
+          payload: {
+            context_type: "hybrid",
+            transition_kind: "context_detachment",
+            direction: "webview_to_native",
+            source_context_type: "webview",
+            target_context_type: "native",
+            source_screen_id: item.context.screenId,
+            source_state_id: item.context.stateId,
+            target_screen_id: nativeScreenId,
+            target_state_id: nativeStateId,
+            webview_index: item.context.webViewIndex,
+            relationship: "no_longer_observed",
+            navigation_verified: false,
+            observation_source: "mobilewright_webview_absence",
+            closure_reason: "not_present_in_complete_observation",
+            context_lifecycle: {
+              status: "detached_from_observation",
+              first_seen_at: item.lifecycle.firstSeenAt,
+              last_seen_at: item.lifecycle.lastSeenAt,
+              detached_at: item.detachedAt,
+              observation_count: item.lifecycle.observationCount,
+              first_observation_number: item.lifecycle.firstObservationNumber,
+              last_observation_number: item.lifecycle.lastObservationNumber,
+              detached_observation_number: item.observationNumber
+            }
+          }
+        });
+      }
       return { events, evidence };
     } finally {
       await device.close();
@@ -226,13 +325,13 @@ export class MobilewrightDiscoveryAdapter {
     device: MobilewrightDevice,
     session: DiscoverySession,
     observedAt: string,
-    nativeScreenId: string,
-    nativeStateId: string,
     addEvent: (input: Omit<DiscoveryEvent, "event_id" | "session_id" | "sequence" | "platform">) => DiscoveryEvent
-  ): Promise<void> {
+  ): Promise<WebViewObservationResult | undefined> {
     let webViewCount = 0;
     try { webViewCount = await device.screen.getByWebView().count(); }
-    catch { return; }
+    catch { return undefined; }
+    const contexts: WebViewContextObservation[] = [];
+    let complete = true;
     const maxElements = this.options.maxWebViewElements ?? 200;
     for (let index = 0; index < webViewCount; index++) {
       let page: WebPage | undefined;
@@ -256,27 +355,13 @@ export class MobilewrightDiscoveryAdapter {
             observation_source: "mobilewright_webview_dom"
           }
         });
-        addEvent({
-          event_type: "transition_observed",
-          screen_id: nativeScreenId,
-          state_id: nativeStateId,
-          transition_id: randomUUID(),
-          occurred_at: observedAt,
-          payload: {
-            context_type: "hybrid",
-            transition_kind: "context_attachment",
-            direction: "native_to_webview",
-            source_context_type: "native",
-            target_context_type: "webview",
-            source_screen_id: nativeScreenId,
-            source_state_id: nativeStateId,
-            target_screen_id: webScreenEvent.screen_id,
-            target_state_id: webScreenEvent.state_id,
-            webview_index: index,
-            relationship: "embedded_context",
-            navigation_verified: false,
-            observation_source: "mobilewright_webview_attachment"
-          }
+        contexts.push({
+          contextKey: stableKey([session.platform, index, url, title].join("|")),
+          screenId,
+          stateId,
+          webViewIndex: index,
+          url,
+          title
         });
         let observed = 0;
         for (const role of WEB_ROLES) {
@@ -314,6 +399,7 @@ export class MobilewrightDiscoveryAdapter {
           }
         }
       } catch (error) {
+        complete = false;
         addEvent({
           event_type: "error", occurred_at: observedAt,
           payload: { context_type: "webview", webview_index: index, error: error instanceof Error ? error.message : String(error) }
@@ -322,5 +408,6 @@ export class MobilewrightDiscoveryAdapter {
         await page?.close().catch(() => {});
       }
     }
+    return { contexts, complete };
   }
 }
