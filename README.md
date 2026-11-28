@@ -72,11 +72,14 @@ Content-Type: application/json
   "locator_strategy": "role_name",
   "locator_role": "button",
   "locator_name": "Continue",
-  "webview_index": 0
+  "webview_index": 0,
+  "screen_id": "screen-uuid-from-action-candidate",
+  "state_id": "state-uuid-from-action-candidate",
+  "target_element_key": "web-element:stable-key"
 }
 ```
 
-Supported actions are `tap` and `fill`. Locator strategies are `label`, `test_id`, and `role_name`. Native targets use Mobilewright native locators; WebView targets use the Playwright-compatible Page locators. The response contains the `action_executed` event and post-action observation events with session-wide sequence numbers. Text supplied to `fill` is used only for execution and is never copied into events.
+Supported actions are `tap` and `fill`. Locator strategies are `label`, `test_id`, and `role_name`. Native targets use Mobilewright native locators; WebView targets use the Playwright-compatible Page locators. The response contains the `action_executed` event (linked to the source `screen_id`, `state_id`, and `target_element_key` when supplied) and post-action observation events with session-wide sequence numbers. Text supplied to `fill` is used only for execution and is never copied into events.
 
 Action execution is disabled by default. Set `MOBILE_ACTION_EXECUTION_ENABLED=true` to enable it. Requests are serialized per session. This endpoint is privileged: do not expose it to untrusted clients. Authentication, authorization, and action-level allowlists are not implemented yet.
 
