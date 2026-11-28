@@ -33,6 +33,16 @@ if (qaServiceToken && Buffer.byteLength(qaServiceToken) < 32) {
 const authorizeEvidenceRead = qaServiceToken
   ? ({ authorization }: { authorization?: string | string[] }) => verifyServiceBearerToken(authorization, qaServiceToken)
   : undefined;
+// Optional built-in action policy: a service bearer token gates tap/back; fill needs an explicit opt-in.
+const actionServiceToken = process.env.REVERSE_SCREEN_ACTION_SERVICE_TOKEN;
+if (actionServiceToken && Buffer.byteLength(actionServiceToken) < 32) {
+  throw new Error("REVERSE_SCREEN_ACTION_SERVICE_TOKEN must contain at least 32 bytes");
+}
+const allowFillActions = process.env.MOBILE_ACTION_ALLOW_FILL === "true";
+const authorizeMobileAction = actionServiceToken
+  ? async ({ action, headers }: { action: { action: string }; headers: { authorization?: string | string[] } }) =>
+      verifyServiceBearerToken(headers.authorization, actionServiceToken) && (action.action !== "fill" || allowFillActions)
+  : undefined;
 const objectStorage = s3Bucket
   ? new S3ObjectStorage({
       bucket: s3Bucket,
@@ -56,6 +66,7 @@ const app = buildApp({
   evidence: evidenceRepository ?? new InMemoryEvidenceArtifactStore(),
   ...(observer ? { observer } : {}),
   allowMobileActions: process.env.MOBILE_ACTION_EXECUTION_ENABLED === "true",
+  ...(authorizeMobileAction ? { authorizeMobileAction } : {}),
   ...(authorizeEvidenceRead ? { authorizeEvidenceRead } : {}),
   ...(objectStorage ? {
     objectStorage,

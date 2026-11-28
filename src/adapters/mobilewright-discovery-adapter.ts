@@ -4,6 +4,7 @@ import type { CapturedEvidence } from "../domain/evidence-artifact.js";
 import type { DiscoveryEvent, Platform } from "../domain/discovery-event.js";
 import type { DiscoverySession } from "../domain/discovery-session.js";
 import type { DiscoveryActionRequest } from "../domain/discovery-action.js";
+import { deterministicUuid } from "../domain/identity.js";
 
 interface ViewNode {
   type: string;
@@ -60,6 +61,7 @@ interface MobilewrightDevice {
     getByLabel(label: string): NativeLocator;
     getByTestId(testId: string): NativeLocator;
     screenshot(): Promise<Buffer>;
+    goBack?(): Promise<void>;
   };
   getForegroundApp(): Promise<{ bundleId: string; name?: string; version?: string }>;
   screenSize(): Promise<{ width: number; height: number; scale: number }>;
@@ -127,6 +129,66 @@ function isActionable(node: ViewNode, role: string): boolean {
     (node.type === "android.view.View" && typeof node.label === "string" && node.label.trim().length > 0);
 }
 
+function isClickable(node: ViewNode): boolean {
+  const raw = (node as ViewNode & { raw?: Record<string, unknown> }).raw;
+  return raw?.clickable === true || raw?.clickable === "true";
+}
+/** Mirrors Mobilewright's name-from-content: own label/text, else descendants' names joined. */
+function accessibleName(node: ViewNode): string {
+  const own = node.label?.trim() || (isEditable(node) ? "" : node.text?.trim());
+  if (own) return own;
+  return (node.children ?? []).map(accessibleName).filter((name) => name !== "").join(" ");
+}
+/** Nodes Mobilewright resolves for getByRole("button"): button types, or clickable plain Views (Jetpack Compose). */
+function matchesButtonRole(node: ViewNode): boolean {
+  const bare = node.type.toLowerCase().split(".").pop() ?? "";
+  if (bare === "view") return isClickable(node);
+  return ["button", "imagebutton", "floatingactionbutton", "materialbutton", "appcompatbutton"].includes(bare);
+}
+function hasActionableDescendant(node: ViewNode): boolean {
+  return (node.children ?? []).some((child) =>
+    isClickable(child) || (child.type === "android.view.View" && !!child.label?.trim()) || hasActionableDescendant(child));
+}
+/** Android resource IDs look like "<package>:id/<name>". */
+function resourcePackages(node: ViewNode, into = new Set<string>()): Set<string> {
+  for (const id of [node.identifier, node.resourceId]) {
+    const match = id?.match(/^([A-Za-z0-9_.]+):id\//);
+    if (match) into.add(match[1]!);
+  }
+  for (const child of node.children ?? []) resourcePackages(child, into);
+  return into;
+}
+/**
+ * Drops window roots owned by another package (e.g. Samsung Edge panel, other overlays).
+ * A root is foreign when it carries resource IDs and none belong to the app or the Android framework.
+ * Apps whose applicationId has a build suffix (com.example.app.debug) keep IDs of the base package.
+ */
+export function excludeForeignWindows(roots: ViewNode[], bundleId: string): ViewNode[] {
+  const ownsPackage = (pkg: string) => pkg === bundleId || bundleId.startsWith(`${pkg}.`) || pkg.startsWith(`${bundleId}.`);
+  return roots.filter((root) => {
+    const packages = [...resourcePackages(root)].filter((pkg) => pkg !== "android");
+    return packages.length === 0 || packages.some(ownsPackage);
+  });
+}
+/**
+ * Human-readable screen name: the topmost short text in the upper quarter of its window
+ * (a top app bar or dialog title). Falls back to the application name.
+ */
+export function inferScreenName(roots: ViewNode[]): string | undefined {
+  let best: { name: string; y: number; x: number } | undefined;
+  const visit = (node: ViewNode, root: ViewNode): void => {
+    const text = isEditable(node) ? "" : node.text?.trim() ?? "";
+    const withinHeader = node.bounds.y - root.bounds.y <= root.bounds.height * 0.25;
+    if (text && node.isVisible && withinHeader && text.length <= 40 && !text.includes("\n") &&
+        (!best || node.bounds.y < best.y || (node.bounds.y === best.y && node.bounds.x < best.x))) {
+      best = { name: text, y: node.bounds.y, x: node.bounds.x };
+    }
+    for (const child of node.children ?? []) visit(child, root);
+  };
+  for (const root of roots) if (root.bounds.height > 0) visit(root, root);
+  return best?.name;
+}
+
 export class MobilewrightDiscoveryAdapter {
   private readonly webViewContexts = new Map<string, Map<number, { contextInstanceId: string; screenId: string; stateId: string; url: string }>>();
 
@@ -149,10 +211,13 @@ export class MobilewrightDiscoveryAdapter {
     if (request.action === "fill" && request.input_value === undefined) {
       throw new Error("mobilewright_action_input_value_required");
     }
-    if (request.locator_strategy === "role_name" && (!request.locator_role || !request.locator_name)) {
+    if (request.action === "back" && request.context_type !== "native") {
+      throw new Error("mobilewright_back_requires_native_context");
+    }
+    if (request.action !== "back" && request.locator_strategy === "role_name" && (!request.locator_role || !request.locator_name)) {
       throw new Error("mobilewright_action_role_locator_incomplete");
     }
-    if (request.locator_strategy !== "role_name" && !request.locator_value) {
+    if (request.action !== "back" && request.locator_strategy !== "role_name" && !request.locator_value) {
       throw new Error("mobilewright_action_locator_value_required");
     }
 
@@ -165,7 +230,10 @@ export class MobilewrightDiscoveryAdapter {
     });
     let page: WebPage | undefined;
     try {
-      if (request.context_type === "native") {
+      if (request.action === "back") {
+        if (!device.screen.goBack) throw new Error("mobilewright_back_unsupported");
+        await device.screen.goBack();
+      } else if (request.context_type === "native") {
         const locator = request.locator_strategy === "label"
           ? device.screen.getByLabel(request.locator_value!)
           : request.locator_strategy === "test_id"
@@ -208,7 +276,7 @@ export class MobilewrightDiscoveryAdapter {
           context_type: request.context_type,
           ...(request.target_element_key ? { target_element_key: request.target_element_key } : {}),
           action: request.action,
-          locator_strategy: request.locator_strategy,
+          ...(request.locator_strategy ? { locator_strategy: request.locator_strategy } : {}),
           ...(request.locator_value ? { locator_value: request.locator_value } : {}),
           ...(request.locator_role ? { locator_role: request.locator_role } : {}),
           ...(request.locator_name ? { locator_name: request.locator_name } : {}),
@@ -221,6 +289,19 @@ export class MobilewrightDiscoveryAdapter {
       await page?.close().catch(() => {});
       await device.close();
     }
+  }
+
+  /**
+   * Jetpack Compose often reports a clickable View without its own name whose caption is on a
+   * child Text (bottom navigation items, list rows, dialog buttons). Mobilewright resolves
+   * getByRole("button", { name }) against the descendants' text, so expose that as the locator
+   * when the name is unique on screen and no descendant is separately actionable.
+   */
+  private contentNamedButtonLocator(node: ViewNode, buttonNameCounts: Map<string, number>) {
+    if (!isClickable(node) || !matchesButtonRole(node) || hasActionableDescendant(node)) return undefined;
+    const name = accessibleName(node);
+    if (!name || name.length > 500 || buttonNameCounts.get(name) !== 1) return undefined;
+    return { locator_strategy: "role_name", locator_role: "button", locator_name: name, locator_source: "descendant_text" };
   }
 
   private async observeInternal(session: DiscoverySession, captureEvidence: boolean): Promise<MobilewrightDiscoveryResult> {
@@ -260,17 +341,28 @@ export class MobilewrightDiscoveryAdapter {
       }
 
       const maxElements = this.options.maxElements ?? 300;
-      const flattened = flattenTree(tree, maxElements);
-      const nativeScreenId = randomUUID();
-      const nativeStateId = randomUUID();
-      const nativeSignature = flattened.map(({ node }) => [node.type, node.identifier ?? "", node.resourceId ?? "", node.label ?? "", isEditable(node) ? "" : node.text ?? ""].join("|")).join("\n");
+      const appTree = excludeForeignWindows(tree, app.bundleId || this.options.bundleId);
+      const flattened = flattenTree(appTree, maxElements);
+      // Screen identity = layout structure (no visible text); state identity = structure + text + toggles.
+      // Both are deterministic, so a revisited screen/state keeps its ID within the application.
+      const structureSignature = flattened.map(({ node, depth }) => [depth, node.type, node.identifier ?? "", node.resourceId ?? ""].join("|")).join("\n");
+      const nativeSignature = flattened.map(({ node }) => [node.type, node.identifier ?? "", node.resourceId ?? "", node.label ?? "", isEditable(node) ? "" : node.text ?? "", node.isSelected ? "s" : "", node.isChecked ? "c" : ""].join("|")).join("\n");
+      const screenKey = `native:${stableKey([session.platform, app.bundleId, structureSignature].join("|"))}`;
+      const stateKey = `native-state:${stableKey([session.platform, app.bundleId, nativeSignature].join("|"))}`;
+      const nativeScreenId = deterministicUuid("reverse-screen/screen", session.application_id, screenKey);
+      const nativeStateId = deterministicUuid("reverse-screen/state", nativeScreenId, stateKey);
+      const appName = app.name ?? app.bundleId;
+      const inferredName = inferScreenName(appTree);
+      const excludedWindowCount = tree.length - appTree.length;
       addEvent({
         event_type: "screen_observed", screen_id: nativeScreenId, state_id: nativeStateId, occurred_at: observedAt,
         payload: {
           context_type: "native", application_id: session.application_id, target_id: session.target_id,
-          screen_key: `native:${stableKey([session.platform, app.bundleId, nativeSignature].join("|"))}`,
-          name: app.name ?? app.bundleId, bundle_id: app.bundleId, app_version: app.version,
-          element_count: flattened.length, tree_node_count: countNodes(tree), truncated: flattened.length < countNodes(tree),
+          screen_key: screenKey, state_key: stateKey,
+          name: inferredName ?? appName, name_source: inferredName ? "header_text" : "application_name",
+          app_name: appName, bundle_id: app.bundleId, app_version: app.version,
+          element_count: flattened.length, tree_node_count: countNodes(appTree), truncated: flattened.length < countNodes(appTree),
+          ...(excludedWindowCount > 0 ? { excluded_foreign_window_count: excludedWindowCount } : {}),
           ...(size ? { screen_size: size } : {}), observation_source: "mobilewright_accessibility_tree"
         }
       });
@@ -284,6 +376,12 @@ export class MobilewrightDiscoveryAdapter {
         payload: { context_type: "native", operation: "screenshot", error: screenshotError }
       });
 
+      const buttonNameCounts = new Map<string, number>();
+      for (const { node } of flattened) {
+        if (!matchesButtonRole(node)) continue;
+        const name = accessibleName(node);
+        if (name) buttonNameCounts.set(name, (buttonNameCounts.get(name) ?? 0) + 1);
+      }
       for (const { node, depth, parentKey, elementKey } of flattened) {
         const role = inferRole(node);
         const label = node.label?.trim() ?? "";
@@ -314,7 +412,7 @@ export class MobilewrightDiscoveryAdapter {
               ? { locator_strategy: "label", locator_value: label }
               : text
                 ? { locator_strategy: "role_name", locator_role: role, locator_name: text }
-                : undefined;
+                : this.contentNamedButtonLocator(node, buttonNameCounts);
           if (actionLocator) addEvent({
             event_type: "action_candidate", screen_id: nativeScreenId, state_id: nativeStateId, occurred_at: observedAt,
             payload: {

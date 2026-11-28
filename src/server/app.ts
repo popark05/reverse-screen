@@ -12,6 +12,7 @@ import {
 } from "../domain/evidence-artifact.js";
 import type { ObjectStorage } from "../infrastructure/object-storage.js";
 import type { DiscoveryActionRequest } from "../domain/discovery-action.js";
+import { deterministicUuid } from "../domain/identity.js";
 
 const discoveryEventSchema = {
   type: "object", additionalProperties: false,
@@ -42,10 +43,13 @@ const createSessionSchema = {
 
 const executeActionSchema = {
   type: "object", additionalProperties: false,
-  required: ["context_type", "action", "locator_strategy", "screen_id", "state_id", "target_element_key"],
+  required: ["context_type", "action", "screen_id", "state_id"],
+  // tap/fill target a discovered element; back is a system navigation from the current state.
+  if: { properties: { action: { enum: ["tap", "fill"] } } },
+  then: { required: ["locator_strategy", "target_element_key"] },
   properties: {
     context_type: { type: "string", enum: ["native", "webview"] },
-    action: { type: "string", enum: ["tap", "fill"] },
+    action: { type: "string", enum: ["tap", "fill", "back"] },
     locator_strategy: { type: "string", enum: ["label", "test_id", "role_name"] },
     locator_value: { type: "string", minLength: 1, maxLength: 500 },
     locator_role: { type: "string", minLength: 1, maxLength: 100 },
@@ -122,6 +126,63 @@ export interface AppOptions {
   authorizeMobileAction?: MobileActionAuthorizer;
   authorizeEvidenceRead?: EvidenceReadAuthorizer;
   onClose?: () => Promise<void>;
+}
+
+/**
+ * Links the state an action was executed from to the state observed right after it.
+ * The transition ID is deterministic in (source state, action target, target state), so
+ * repeating the same path yields the same transition. Because the action was executed by
+ * this session and the target was observed immediately afterwards, navigation is verified.
+ */
+function buildActionTransition(
+  session: DiscoverySession,
+  action: DiscoveryActionRequest,
+  actionEvent: DiscoveryEvent,
+  observation: DiscoveryEvent[],
+  sequence: number
+): DiscoveryEvent | undefined {
+  if (!action.screen_id || !action.state_id) return undefined;
+  const target = observation.find((event) =>
+    event.event_type === "screen_observed" &&
+    event.payload.context_type === action.context_type &&
+    (action.context_type !== "webview" || event.payload.webview_index === (action.webview_index ?? 0)));
+  if (!target?.screen_id || !target.state_id) return undefined;
+  const actionSignature = [
+    action.context_type, action.action, action.locator_strategy ?? "", action.locator_value ?? "",
+    action.locator_role ?? "", action.locator_name ?? "", String(action.webview_index ?? "")
+  ].join("|");
+  const transitionKind = target.state_id === action.state_id
+    ? "no_change"
+    : target.screen_id === action.screen_id ? "state_change" : "navigation";
+  return {
+    event_id: randomUUID(),
+    session_id: session.session_id,
+    sequence,
+    event_type: "transition_observed",
+    occurred_at: target.occurred_at,
+    platform: session.platform,
+    screen_id: action.screen_id,
+    state_id: action.state_id,
+    transition_id: deterministicUuid("reverse-screen/transition", action.state_id, actionSignature, target.state_id),
+    payload: {
+      context_type: action.context_type,
+      transition_kind: transitionKind,
+      source_screen_id: action.screen_id,
+      source_state_id: action.state_id,
+      target_screen_id: target.screen_id,
+      target_state_id: target.state_id,
+      ...(typeof target.payload.name === "string" ? { target_screen_name: target.payload.name } : {}),
+      action_event_id: actionEvent.event_id,
+      action: action.action,
+      ...(action.target_element_key ? { target_element_key: action.target_element_key } : {}),
+      ...(action.locator_strategy ? { locator_strategy: action.locator_strategy } : {}),
+      ...(action.locator_value ? { locator_value: action.locator_value } : {}),
+      ...(action.locator_role ? { locator_role: action.locator_role } : {}),
+      ...(action.locator_name ? { locator_name: action.locator_name } : {}),
+      navigation_verified: transitionKind !== "no_change",
+      observation_source: "post_action_observation"
+    }
+  };
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -256,10 +317,14 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
         // Authorization failures are closed and do not expose policy errors or request data.
       }
       if (!authorized) return reply.code(403).send({ error: "mobile_action_not_authorized" });
-      if (action.locator_strategy === "role_name" && (!action.locator_role || !action.locator_name)) {
+      const isBack = action.action === "back";
+      if (isBack && (action.context_type !== "native" || action.input_value !== undefined || action.locator_strategy !== undefined)) {
+        return reply.code(400).send({ error: "back_action_must_be_native_without_locator" });
+      }
+      if (!isBack && action.locator_strategy === "role_name" && (!action.locator_role || !action.locator_name)) {
         return reply.code(400).send({ error: "action_role_locator_incomplete" });
       }
-      if (action.locator_strategy !== "role_name" && !action.locator_value) {
+      if (!isBack && action.locator_strategy !== "role_name" && !action.locator_value) {
         return reply.code(400).send({ error: "action_locator_value_required" });
       }
       if (action.action === "fill" && action.input_value === undefined) {
@@ -278,7 +343,9 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
         event.payload.context_type === action.context_type &&
         (action.context_type !== "webview" || event.payload.webview_index === (action.webview_index ?? 0))
       );
-      const candidate = existing.find((event) =>
+      const candidate = isBack
+        ? (latestScreen && latestScreen.screen_id === action.screen_id && latestScreen.state_id === action.state_id ? latestScreen : undefined)
+        : existing.find((event) =>
         event.event_type === "action_candidate" &&
         event.screen_id === action.screen_id &&
         event.state_id === action.state_id &&
@@ -325,9 +392,14 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
             payload: { ...event.payload, observation_phase: "post_action" }
           }));
         }
+        const transition = buildActionTransition(
+          current, action, acceptedAction.event, acceptedObservation.map((item) => item.event), nextSequence
+        );
+        const acceptedTransition = transition ? await store.append(transition) : undefined;
         return reply.code(201).send({
           action: acceptedAction.event,
-          observation_events: acceptedObservation.map((item) => item.event)
+          observation_events: acceptedObservation.map((item) => item.event),
+          ...(acceptedTransition ? { transition: acceptedTransition.event } : {})
         });
       } catch {
         const failureEvent: DiscoveryEvent = {

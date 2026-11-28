@@ -179,6 +179,16 @@ test("mobile action execution is opt-in and appends action plus post-action obse
   assert.equal(JSON.stringify(action.json()).includes("secret@example.test"), false);
   assert.deepEqual(action.json().observation_events.map((event: { sequence: number }) => event.sequence), [4]);
   const events = await enabledApp.inject({ method: "GET", url: `/v1/discovery-sessions/${enabledSessionId}/events` });
-  assert.deepEqual(events.json().events.map((event: { sequence: number }) => event.sequence), [1, 2, 3, 4]);
+  assert.deepEqual(events.json().events.map((event: { sequence: number }) => event.sequence), [1, 2, 3, 4, 5]);
+  const transition = action.json().transition;
+  assert.equal(transition.event_type, "transition_observed");
+  assert.equal(transition.sequence, 5);
+  assert.equal(transition.screen_id, "11111111-1111-4111-8111-111111111111");
+  assert.equal(transition.payload.transition_kind, "navigation");
+  assert.equal(transition.payload.target_screen_id, "33333333-3333-4333-8333-333333333333");
+  assert.equal(transition.payload.target_state_id, "44444444-4444-4444-8444-444444444444");
+  assert.equal(transition.payload.action_event_id, action.json().action.event_id);
+  assert.equal(transition.payload.navigation_verified, true);
+  assert.equal(JSON.stringify(transition).includes("secret@example.test"), false);
   await enabledApp.close();
 });

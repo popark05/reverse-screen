@@ -75,7 +75,7 @@
     "payload": {
       "type": "object",
       "additionalProperties": true,
-      "description": "Event-specific metadata. Hybrid context attachment, persistence, and detachment transitions use transition_kind=context_attachment|context_persisted|context_detachment and explicitly set navigation_verified=false; lifecycle observations do not establish navigation causality."
+      "description": "Event-specific metadata. Action-driven transitions (emitted after POST /actions) use transition_kind=navigation|state_change|no_change with source/target screen and state IDs, action_event_id and navigation_verified=true unless no_change; their transition_id is deterministic in (source state, action, target state). Hybrid context attachment, persistence, and detachment transitions use transition_kind=context_attachment|context_persisted|context_detachment and explicitly set navigation_verified=false; lifecycle observations do not establish navigation causality. Native screen_id/state_id are deterministic per application_id (structure / structure+content)."
     },
     "evidence_ids": {
       "type": "array",
