@@ -58,6 +58,28 @@ POST /v1/discovery-sessions/{sessionId}/observe
 
 The endpoint moves the session through `created -> running -> completed` and stores normalized events. When `S3_BUCKET` is configured, it also captures a PNG screenshot through `screen.screenshot()`, uploads it to Object Storage, verifies the stored checksum/size/content type, registers the EvidenceArtifact, and adds its ID to the native `screen_observed` event. Set `MOBILE_DISCOVERY_MAX_EVIDENCE_BYTES` to cap screenshot size (default 20 MiB). If evidence storage fails, the observation is marked failed. A native-only app simply produces no WebView events. `MOBILE_DISCOVERY_MAX_ELEMENTS` bounds native elements (default 300); `MOBILE_DISCOVERY_MAX_WEBVIEW_ELEMENTS` bounds semantic WebView elements (default 200).
 
+## Coordinated Mobile Actions
+
+After the initial discovery session reaches `completed`, an enabled Mobilewright observer can execute one locator-based action and immediately run a fresh observation:
+
+```http
+POST /v1/discovery-sessions/{sessionId}/actions
+Content-Type: application/json
+
+{
+  "context_type": "webview",
+  "action": "tap",
+  "locator_strategy": "role_name",
+  "locator_role": "button",
+  "locator_name": "Continue",
+  "webview_index": 0
+}
+```
+
+Supported actions are `tap` and `fill`. Locator strategies are `label`, `test_id`, and `role_name`. Native targets use Mobilewright native locators; WebView targets use the Playwright-compatible Page locators. The response contains the `action_executed` event and post-action observation events with session-wide sequence numbers. Text supplied to `fill` is used only for execution and is never copied into events.
+
+Action execution is disabled by default. Set `MOBILE_ACTION_EXECUTION_ENABLED=true` to enable it. Requests are serialized per session. This endpoint is privileged: do not expose it to untrusted clients. Authentication, authorization, and action-level allowlists are not implemented yet.
+
 ## Evidence Object Storage
 
 Evidence binaries are stored in an S3-compatible object store; PostgreSQL stores only metadata and the stable `s3://bucket/key` URI. The API issues short-lived presigned URLs so clients upload/download bytes directly without routing client payloads through the API server. When Mobilewright discovery is enabled together with S3 storage, the adapter captures a native PNG screenshot and the discovery API uploads it server-side, verifies its checksum, registers EvidenceArtifact metadata, and links the evidence ID to the corresponding native screen event.
@@ -154,6 +176,7 @@ Supported kinds: `screenshot`, `video`, `dom_snapshot`, `accessibility_tree`, `l
 - `GET /v1/discovery-sessions`
 - `GET /v1/discovery-sessions/:sessionId`
 - `POST /v1/discovery-sessions/:sessionId/observe` (when an observer is configured)
+- `POST /v1/discovery-sessions/:sessionId/actions` (opt-in Mobilewright action execution)
 - `POST /v1/discovery-sessions/:sessionId/transitions`
 - `POST /v1/discovery-events`
 - `GET /v1/discovery-sessions/:sessionId/events`
@@ -175,8 +198,8 @@ Event ingestion is idempotent by `event_id`; PostgreSQL additionally enforces un
 - Mobilewright native screenshot capture is implemented; video recording and persisted raw DOM snapshots are not yet integrated. DOM snapshot contents are not stored by the adapter; only their SHA-256 digest and summary metadata are emitted.
 
 - Repeated calls to the Mobilewright adapter within the same discovery session retain an in-memory WebView context instance ID by WebView slot. They emit `context_persisted` when that slot is observed again and `context_detachment` when a successful enumeration no longer contains it. These lifecycle events describe observed presence/absence only; slot reuse, navigation causality, and user-triggered return-to-native behavior are not verified.
-- The lifecycle tracker is process-local and adapter-instance-local. The current HTTP observe endpoint still performs a single observation per session; durable multi-round orchestration and coordinated native/WebView action execution remain future work.
+- The lifecycle tracker is process-local and adapter-instance-local. The HTTP observe endpoint performs the initial observation; action requests then trigger a fresh post-action observation and append its events to the same session.
 
-- Hybrid context attachment is now represented as a directed native-to-WebView `transition_observed` event. This describes the embedded-context relationship found during one observation, not a user-triggered navigation or a verified runtime handoff. The adapter does not yet execute coordinated actions, observe WebView-to-native returns, or correlate context changes across multiple observations.
+- Mobile action execution is opt-in via `MOBILE_ACTION_EXECUTION_ENABLED=true` and supports locator-based `tap` and `fill` in native and WebView contexts. Fill values are never written to discovery events. The action endpoint is not production-safe until authentication and authorization are implemented.
 - In-memory mode is intended for tests/local exploration, not multi-process production use.
 - Real-device and simulator E2E validation is still required; CI currently covers fake-driver/unit tests.
