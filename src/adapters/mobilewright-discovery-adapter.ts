@@ -271,6 +271,7 @@ export class MobilewrightDiscoveryAdapter {
     try { webViewCount = await device.screen.getByWebView().count(); }
     catch { return false; }
     const maxElements = this.options.maxWebViewElements ?? 200;
+    let observationComplete = true;
     for (let index = 0; index < webViewCount; index++) {
       let page: WebPage | undefined;
       try {
@@ -383,6 +384,7 @@ export class MobilewrightDiscoveryAdapter {
           }
         }
       } catch (error) {
+        observationComplete = false;
         addEvent({
           event_type: "error", occurred_at: observedAt,
           payload: { context_type: "webview", webview_index: index, error: error instanceof Error ? error.message : String(error) }
@@ -391,6 +393,6 @@ export class MobilewrightDiscoveryAdapter {
         await page?.close().catch(() => {});
       }
     }
-    return true;
+    return observationComplete;
   }
 }
