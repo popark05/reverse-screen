@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Page } from "playwright";
+import type { CapturedEvidence } from "../domain/evidence-artifact.js";
 import type { DiscoveryEvent } from "../domain/discovery-event.js";
 
 interface ObservedElement {
@@ -146,6 +147,25 @@ export class PlaywrightDiscoveryAdapter {
       }
     }
     return events;
+  }
+
+
+  async observeWithEvidence(): Promise<{ events: DiscoveryEvent[]; evidence: CapturedEvidence[] }> {
+    const events = await this.observe();
+    const screenEvent = events.find((event) => event.event_type === "screen_observed");
+    if (!screenEvent) return { events, evidence: [] };
+
+    const bytes = await this.page.screenshot({ type: "png" });
+    return {
+      events,
+      evidence: [{
+        kind: "screenshot",
+        content_type: "image/png",
+        bytes,
+        captured_at: screenEvent.occurred_at,
+        event_id: screenEvent.event_id
+      }]
+    };
   }
 
   private event(input: Omit<DiscoveryEvent, "event_id" | "session_id" | "sequence" | "platform">): DiscoveryEvent {
