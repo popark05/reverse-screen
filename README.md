@@ -96,6 +96,19 @@ Action execution is disabled by default. The bundled server offers an optional b
 
 Action execution is disabled by default. Set `MOBILE_ACTION_EXECUTION_ENABLED=true` to enable it, and configure an explicit `authorizeMobileAction` policy when building the server. If no authorizer is configured, or it rejects or errors, the API returns `403` and does not execute the action. The policy receives the persisted session, the action metadata without `input_value`, and request headers so the hosting service can apply its authenticated principal, session ownership, tenant, context, action, and locator rules. Do not trust identity headers unless trusted authentication middleware has validated them. The request schema already limits actions to `tap`/`fill`, contexts to `native`/`webview`, and locator strategies to `label`/`test_id`/`role_name`; deployments should further restrict these per tenant and application. Requests are serialized per session. This endpoint remains privileged and must not be exposed to untrusted clients; the repository does not provide an authentication system or tenant model itself.
 
+## Wireflow draft export
+
+```http
+GET /v1/discovery-sessions/{sessionId}/wireflow-draft
+```
+
+Returns a request body for Wireflow Review `POST /v1/flows/import` (camelCase, per Wireflow Review `docs/architecture/flow-contract.md`). Every observed native screen becomes a node titled by its first observed `name`; every distinct action-driven transition (`navigation` or `state_change`) becomes an edge labelled by its locator, with `kind: "back"` for back actions. `no_change` and hybrid lifecycle transitions are not edges, and WebView screens appear only when an action transition reaches or leaves them. Node IDs are screen IDs and edge IDs derive from transition IDs, with `discoveryRef` carrying `screenId`/`transitionId` and `sessionId`, so exporting the same session again is stable. Unknown sessions return `404`; sessions without observed screens return `409 no_screens_observed`.
+
+```bash
+curl -s localhost:3000/v1/discovery-sessions/$SESSION/wireflow-draft \
+  | curl -s -X POST localhost:3002/v1/flows/import -H 'content-type: application/json' --data-binary @-
+```
+
 ## Evidence Object Storage
 
 Evidence binaries are stored in an S3-compatible object store; PostgreSQL stores only metadata and the stable `s3://bucket/key` URI. The API issues short-lived presigned URLs so clients upload/download bytes directly without routing client payloads through the API server. When Mobilewright discovery is enabled together with S3 storage, the adapter captures a native PNG screenshot and the discovery API uploads it server-side, verifies its checksum, registers EvidenceArtifact metadata, and links the evidence ID to the corresponding native screen event.

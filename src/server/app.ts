@@ -13,6 +13,7 @@ import {
 import type { ObjectStorage } from "../infrastructure/object-storage.js";
 import type { DiscoveryActionRequest } from "../domain/discovery-action.js";
 import { deterministicUuid } from "../domain/identity.js";
+import { buildWireflowDraft } from "../domain/wireflow-draft.js";
 
 const discoveryEventSchema = {
   type: "object", additionalProperties: false,
@@ -435,6 +436,15 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   app.get<{ Params: { sessionId: string } }>("/v1/discovery-sessions/:sessionId/events", async (request) => ({
     session_id: request.params.sessionId, events: await store.listBySession(request.params.sessionId)
   }));
+
+  // Wireflow Review import body (POST /v1/flows/import) built from this session's screens and transitions.
+  app.get<{ Params: { sessionId: string } }>("/v1/discovery-sessions/:sessionId/wireflow-draft", async (request, reply) => {
+    const session = await sessions.get(request.params.sessionId);
+    if (!session) return reply.code(404).send({ error: "discovery_session_not_found" });
+    const draft = buildWireflowDraft(session, await store.listBySession(session.session_id));
+    if (!draft) return reply.code(409).send({ error: "no_screens_observed" });
+    return draft;
+  });
 
   app.post<{ Body: CreateEvidenceArtifactInput }>("/v1/evidence-artifacts", { schema: { body: createEvidenceSchema } },
     async (request, reply) => {
