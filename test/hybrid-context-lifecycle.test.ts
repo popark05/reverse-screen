@@ -9,29 +9,29 @@ const context = (contextKey: string, screenId: string) => ({
 
 test("tracks attachment, persistence, detachment and reattachment across complete observations", () => {
   const tracker = new HybridContextLifecycleTracker();
-  const first = tracker.reconcile("session-1", "2026-11-28T00:00:00.000Z", "native-1", "native-state-1", [context("web-1", "screen-1")]);
+  const first = tracker.reconcile("session-1", "2026-11-28T00:00:00.000Z", [context("web-1", "screen-1")]);
   assert.equal(first.observationNumber, 1);
   assert.equal(first.active.length, 1);
   assert.equal(first.active[0]?.isNew, true);
   assert.equal(first.active[0]?.lifecycle.observationCount, 1);
 
-  const second = tracker.reconcile("session-1", "2026-11-28T00:00:05.000Z", "native-2", "native-state-2", [context("web-1", "screen-2")]);
+  const second = tracker.reconcile("session-1", "2026-11-28T00:00:05.000Z", [context("web-1", "screen-2")]);
   assert.equal(second.observationNumber, 2);
   assert.equal(second.active[0]?.isNew, false);
   assert.equal(second.active[0]?.lifecycle.transitionId, first.active[0]?.lifecycle.transitionId);
   assert.equal(second.active[0]?.lifecycle.observationCount, 2);
   assert.equal(second.active[0]?.lifecycle.firstSeenAt, "2026-11-28T00:00:00.000Z");
 
-  const third = tracker.reconcile("session-1", "2026-11-28T00:00:10.000Z", "native-3", "native-state-3", []);
+  const third = tracker.reconcile("session-1", "2026-11-28T00:00:10.000Z", []);
   assert.equal(third.detached.length, 1);
   assert.equal(third.detached[0]?.context.screenId, "screen-2");
   assert.equal(third.detached[0]?.lifecycle.transitionId, first.active[0]?.lifecycle.transitionId);
   assert.equal(third.detached[0]?.lifecycle.observationCount, 2);
 
-  const fourth = tracker.reconcile("session-1", "2026-11-28T00:00:15.000Z", "native-4", "native-state-4", []);
+  const fourth = tracker.reconcile("session-1", "2026-11-28T00:00:15.000Z", []);
   assert.equal(fourth.detached.length, 0);
 
-  const fifth = tracker.reconcile("session-1", "2026-11-28T00:00:20.000Z", "native-5", "native-state-5", [context("web-1", "screen-5")]);
+  const fifth = tracker.reconcile("session-1", "2026-11-28T00:00:20.000Z", [context("web-1", "screen-5")]);
   assert.equal(fifth.active[0]?.isNew, true);
   assert.notEqual(fifth.active[0]?.lifecycle.transitionId, first.active[0]?.lifecycle.transitionId);
   assert.equal(fifth.active[0]?.lifecycle.observationCount, 1);
@@ -39,8 +39,8 @@ test("tracks attachment, persistence, detachment and reattachment across complet
 
 test("keeps lifecycle state isolated by discovery session", () => {
   const tracker = new HybridContextLifecycleTracker();
-  tracker.reconcile("session-a", "2026-11-28T00:00:00.000Z", "na", "sa", [context("web-1", "screen-a")]);
-  const other = tracker.reconcile("session-b", "2026-11-28T00:00:01.000Z", "nb", "sb", []);
+  tracker.reconcile("session-a", "2026-11-28T00:00:00.000Z", [context("web-1", "screen-a")]);
+  const other = tracker.reconcile("session-b", "2026-11-28T00:00:01.000Z", []);
   assert.equal(other.observationNumber, 1);
   assert.equal(other.detached.length, 0);
 });
