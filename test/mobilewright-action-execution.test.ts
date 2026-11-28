@@ -34,11 +34,17 @@ test("executes native tap actions through Mobilewright locators", async () => {
   });
   const event = await adapter.executeAction(session, {
     context_type: "native", action: "tap", locator_strategy: "role_name",
-    locator_role: "button", locator_name: "Continue"
+    locator_role: "button", locator_name: "Continue",
+    screen_id: "11111111-1111-4111-8111-111111111111",
+    state_id: "22222222-2222-4222-8222-222222222222",
+    target_element_key: "native-element:abc123"
   });
   assert.equal(event.event_type, "action_executed");
   assert.equal(event.payload.context_type, "native");
   assert.equal(event.payload.action, "tap");
+  assert.equal(event.screen_id, "11111111-1111-4111-8111-111111111111");
+  assert.equal(event.state_id, "22222222-2222-4222-8222-222222222222");
+  assert.equal(event.payload.target_element_key, "native-element:abc123");
   assert.deepEqual(calls, ["role:button:Continue", "native-tap", "device-close"]);
 });
 
