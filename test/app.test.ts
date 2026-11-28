@@ -143,8 +143,8 @@ test("mobile action execution is opt-in and appends action plus post-action obse
   assert.equal(action.json().action.payload.target_element_key, "native-element:email");
   assert.equal(action.json().action.screen_id, "11111111-1111-4111-8111-111111111111");
   assert.equal(JSON.stringify(action.json()).includes("secret@example.test"), false);
-  assert.deepEqual(action.json().observation_events.map((event: { sequence: number }) => event.sequence), [3]);
+  assert.deepEqual(action.json().observation_events.map((event: { sequence: number }) => event.sequence), [4]);
   const events = await enabledApp.inject({ method: "GET", url: `/v1/discovery-sessions/${enabledSessionId}/events` });
-  assert.deepEqual(events.json().events.map((event: { sequence: number }) => event.sequence), [1, 2, 3]);
+  assert.deepEqual(events.json().events.map((event: { sequence: number }) => event.sequence), [1, 2, 3, 4]);
   await enabledApp.close();
 });
