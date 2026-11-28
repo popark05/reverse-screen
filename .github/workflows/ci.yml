@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, feat/playwright-screenshot-evidence]
-  pull_request:
     branches: [main]
+  pull_request:
+    branches: [main, feat/playwright-screenshot-evidence]
 
 jobs:
   verify:
