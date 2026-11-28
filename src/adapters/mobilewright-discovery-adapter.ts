@@ -3,6 +3,7 @@ import { android, ios } from "mobilewright";
 import type { CapturedEvidence } from "../domain/evidence-artifact.js";
 import type { DiscoveryEvent, Platform } from "../domain/discovery-event.js";
 import type { DiscoverySession } from "../domain/discovery-session.js";
+import type { DiscoveryActionRequest } from "../domain/discovery-action.js";
 
 interface ViewNode {
   type: string;
@@ -22,6 +23,8 @@ interface ViewNode {
 }
 interface WebLocator {
   count(): Promise<number>;
+  click(): Promise<void>;
+  fill(value: string): Promise<void>;
   nth(index: number): WebLocator;
   getAttribute(name: string): Promise<string | null>;
   innerText(): Promise<string>;
@@ -34,18 +37,27 @@ interface WebPage {
   title(): Promise<string>;
   content(): Promise<string>;
   locator(selector: string): WebLocator;
-  getByRole(role: string): WebLocator;
+  getByRole(role: string, options?: { name?: string }): WebLocator;
+  getByLabel(label: string): WebLocator;
+  getByTestId(testId: string): WebLocator;
   close(): Promise<void>;
 }
 interface WebViewLocator {
   count(): Promise<number>;
   nth(index: number): { page(): Promise<WebPage> };
 }
+interface NativeLocator {
+  tap(): Promise<void>;
+  fill(value: string): Promise<void>;
+}
 interface MobilewrightDevice {
   id: string;
   screen: {
     viewTree(): Promise<ViewNode[]>;
     getByWebView(): WebViewLocator;
+    getByRole(role: string, options?: { name?: string }): NativeLocator;
+    getByLabel(label: string): NativeLocator;
+    getByTestId(testId: string): NativeLocator;
     screenshot(): Promise<Buffer>;
   };
   getForegroundApp(): Promise<{ bundleId: string; name?: string; version?: string }>;
@@ -126,6 +138,76 @@ export class MobilewrightDiscoveryAdapter {
 
   async observeWithEvidence(session: DiscoverySession): Promise<MobilewrightDiscoveryResult> {
     return this.observeInternal(session, true);
+  }
+
+  async executeAction(session: DiscoverySession, request: DiscoveryActionRequest): Promise<DiscoveryEvent> {
+    if (session.platform !== "ios" && session.platform !== "android") {
+      throw new Error(`mobilewright_action_platform_unsupported:${session.platform}`);
+    }
+    if (request.action === "fill" && request.input_value === undefined) {
+      throw new Error("mobilewright_action_input_value_required");
+    }
+    if (request.locator_strategy === "role_name" && (!request.locator_role || !request.locator_name)) {
+      throw new Error("mobilewright_action_role_locator_incomplete");
+    }
+    if (request.locator_strategy !== "role_name" && !request.locator_value) {
+      throw new Error("mobilewright_action_locator_value_required");
+    }
+
+    const launcher = session.platform === "ios" ? this.factory.ios : this.factory.android;
+    const device = await launcher.launch({
+      deviceId: session.target_id,
+      bundleId: this.options.bundleId,
+      ...(this.options.installAppPath ? { installApps: this.options.installAppPath } : {})
+    });
+    let page: WebPage | undefined;
+    try {
+      if (request.context_type === "native") {
+        const locator = request.locator_strategy === "label"
+          ? device.screen.getByLabel(request.locator_value!)
+          : request.locator_strategy === "test_id"
+            ? device.screen.getByTestId(request.locator_value!)
+            : device.screen.getByRole(request.locator_role!, { name: request.locator_name! });
+        if (request.action === "tap") await locator.tap();
+        else await locator.fill(request.input_value!);
+      } else {
+        const webViews = device.screen.getByWebView();
+        const webViewIndex = request.webview_index ?? 0;
+        const count = await webViews.count();
+        if (webViewIndex >= count) throw new Error("mobilewright_action_webview_not_found");
+        page = await webViews.nth(webViewIndex).page();
+        const locator = request.locator_strategy === "label"
+          ? page.getByLabel(request.locator_value!)
+          : request.locator_strategy === "test_id"
+            ? page.getByTestId(request.locator_value!)
+            : page.getByRole(request.locator_role!, { name: request.locator_name! });
+        if (request.action === "tap") await locator.click();
+        else await locator.fill(request.input_value!);
+      }
+
+      return {
+        event_id: randomUUID(),
+        session_id: session.session_id,
+        sequence: 1,
+        event_type: "action_executed",
+        occurred_at: new Date().toISOString(),
+        platform: session.platform as Platform,
+        payload: {
+          context_type: request.context_type,
+          action: request.action,
+          locator_strategy: request.locator_strategy,
+          ...(request.locator_value ? { locator_value: request.locator_value } : {}),
+          ...(request.locator_role ? { locator_role: request.locator_role } : {}),
+          ...(request.locator_name ? { locator_name: request.locator_name } : {}),
+          ...(request.context_type === "webview" ? { webview_index: request.webview_index ?? 0 } : {}),
+          outcome: "succeeded",
+          value_redacted: request.action === "fill"
+        }
+      };
+    } finally {
+      await page?.close().catch(() => {});
+      await device.close();
+    }
   }
 
   private async observeInternal(session: DiscoverySession, captureEvidence: boolean): Promise<MobilewrightDiscoveryResult> {
@@ -211,10 +293,23 @@ export class MobilewrightDiscoveryAdapter {
             locator_candidates: locatorCandidates, value_redacted: isEditable(node)
           }
         });
-        if (isActionable(node, role)) addEvent({
-          event_type: "action_candidate", screen_id: nativeScreenId, state_id: nativeStateId, occurred_at: observedAt,
-          payload: { context_type: "native", action: isEditable(node) ? "enter_text" : "tap", target_element_key: elementKey, enabled: node.isEnabled }
-        });
+        if (isActionable(node, role)) {
+          const actionLocator = node.identifier
+            ? { locator_strategy: "test_id", locator_value: node.identifier }
+            : label
+              ? { locator_strategy: "label", locator_value: label }
+              : text
+                ? { locator_strategy: "role_name", locator_role: role, locator_name: text }
+                : undefined;
+          addEvent({
+            event_type: "action_candidate", screen_id: nativeScreenId, state_id: nativeStateId, occurred_at: observedAt,
+            payload: {
+              context_type: "native", action: isEditable(node) ? "fill" : "tap",
+              target_element_key: elementKey, enabled: node.isEnabled,
+              ...(actionLocator ?? {})
+            }
+          });
+        }
       }
 
       const previousWebViews = this.webViewContexts.get(session.session_id) ?? new Map<number, { contextInstanceId: string; screenId: string; stateId: string; url: string }>();
@@ -379,6 +474,17 @@ export class MobilewrightDiscoveryAdapter {
                   value_redacted: role === "textbox"
                 }
               });
+              if (enabled && accessibleName && (role === "textbox" || ["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "option"].includes(role))) {
+                addEvent({
+                  event_type: "action_candidate", screen_id: screenId, state_id: stateId, occurred_at: observedAt,
+                  payload: {
+                    context_type: "webview", webview_index: index,
+                    action: role === "textbox" ? "fill" : "tap",
+                    target_element_key: key, enabled,
+                    locator_strategy: "role_name", locator_role: role, locator_name: accessibleName
+                  }
+                });
+              }
               observed++;
             } catch { /* A DOM node can detach during a live observation. */ }
           }
