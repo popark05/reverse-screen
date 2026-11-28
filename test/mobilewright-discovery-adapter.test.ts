@@ -50,6 +50,18 @@ test("Mobilewright discovery emits native and WebView contexts in one ordered se
   const webScreen = events.find((event) => event.event_type === "screen_observed" && event.payload.context_type === "webview");
   assert.equal(webScreen?.payload.url, "https://app.example.test/checkout");
   assert.equal(webScreen?.payload.dom_element_count, 4);
+  const nativeScreen = events.find((event) => event.event_type === "screen_observed" && event.payload.context_type === "native");
+  assert.equal(webScreen?.payload.parent_screen_id, nativeScreen?.screen_id);
+  assert.equal(webScreen?.payload.parent_state_id, nativeScreen?.state_id);
+  const handoff = events.find((event) => event.event_type === "transition_observed");
+  assert.ok(handoff?.transition_id);
+  assert.equal(handoff?.screen_id, nativeScreen?.screen_id);
+  assert.equal(handoff?.state_id, nativeScreen?.state_id);
+  assert.equal(handoff?.payload.transition_kind, "context_attachment");
+  assert.equal(handoff?.payload.direction, "native_to_webview");
+  assert.equal(handoff?.payload.source_screen_id, nativeScreen?.screen_id);
+  assert.equal(handoff?.payload.target_screen_id, webScreen?.screen_id);
+  assert.equal(handoff?.payload.navigation_verified, false);
   const webElements = events.filter((event) => event.event_type === "element_observed" && event.payload.context_type === "webview");
   assert.equal(webElements.length, 2);
   assert.equal(webElements.find((event) => event.payload.role === "textbox")?.payload.text, undefined);
@@ -70,6 +82,7 @@ test("native-only apps complete discovery when no WebView is present", async () 
   const events = await adapter.observe(session);
   assert.equal(events.length, 1);
   assert.equal(events[0]?.payload.context_type, "native");
+  assert.equal(events.some((event) => event.event_type === "transition_observed"), false);
 });
 
 test("Mobilewright discovery rejects unsupported platforms and requires bundle identifier", async () => {
