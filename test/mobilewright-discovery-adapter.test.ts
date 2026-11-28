@@ -89,6 +89,33 @@ test("native-only apps complete discovery when no WebView is present", async () 
   assert.deepEqual(launchModes, [true, false], "only the initial observation should launch the app");
 });
 
+test("labeled Android Compose views produce native tap candidates", async () => {
+  const device = {
+    id: "R3CR10LXLZW",
+    screen: {
+      viewTree: async () => [{
+        type: "android.view.View", label: "Search", isVisible: true, isEnabled: true,
+        bounds: { x: 45, y: 148, width: 68, height: 68 }, children: []
+      }],
+      getByWebView: () => ({ count: async () => 0 }),
+      screenshot: async () => Buffer.from("png")
+    },
+    getForegroundApp: async () => ({ bundleId: "com.google.samples.apps.nowinandroid.demo.debug" }),
+    screenSize: async () => ({ width: 1080, height: 2400, scale: 3 }),
+    close: async () => {}
+  };
+  const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "com.google.samples.apps.nowinandroid.demo.debug" }, {
+    ios: { launch: async () => device as never }, android: { launch: async () => device as never }
+  });
+  const events = await adapter.observe(session);
+  const candidate = events.find((event) => event.event_type === "action_candidate");
+  assert.ok(candidate);
+  assert.equal(candidate.payload.context_type, "native");
+  assert.equal(candidate.payload.action, "tap");
+  assert.equal(candidate.payload.locator_strategy, "label");
+  assert.equal(candidate.payload.locator_value, "Search");
+});
+
 test("Mobilewright discovery rejects unsupported platforms and requires bundle identifier", async () => {
   const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "com.example.app" }, {
     ios: { launch: async () => { throw new Error("not called"); } },

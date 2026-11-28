@@ -122,7 +122,8 @@ function isActionable(node: ViewNode, role: string): boolean {
   if (!node.isVisible || !node.isEnabled) return false;
   if (isEditable(node) || ["button", "switch", "checkbox", "radio", "tab", "link"].includes(role)) return true;
   const raw = (node as ViewNode & { raw?: Record<string, unknown> }).raw;
-  return raw?.clickable === true || raw?.accessible === true;
+  return raw?.clickable === true || raw?.accessible === true ||
+    (node.type === "android.view.View" && typeof node.label === "string" && node.label.trim().length > 0);
 }
 
 export class MobilewrightDiscoveryAdapter {
