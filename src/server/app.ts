@@ -11,6 +11,7 @@ import {
   type EvidenceArtifactStore
 } from "../domain/evidence-artifact.js";
 import type { ObjectStorage } from "../infrastructure/object-storage.js";
+import type { DiscoveryActionRequest } from "../domain/discovery-action.js";
 
 const discoveryEventSchema = {
   type: "object", additionalProperties: false,
@@ -36,6 +37,21 @@ const createSessionSchema = {
     application_id: { type: "string", minLength: 1, maxLength: 200 },
     platform: { type: "string", enum: ["web", "android", "ios", "hybrid"] },
     target_id: { type: "string", minLength: 1, maxLength: 200 }
+  }
+} as const;
+
+const executeActionSchema = {
+  type: "object", additionalProperties: false,
+  required: ["context_type", "action", "locator_strategy"],
+  properties: {
+    context_type: { type: "string", enum: ["native", "webview"] },
+    action: { type: "string", enum: ["tap", "fill"] },
+    locator_strategy: { type: "string", enum: ["label", "test_id", "role_name"] },
+    locator_value: { type: "string", minLength: 1, maxLength: 500 },
+    locator_role: { type: "string", minLength: 1, maxLength: 100 },
+    locator_name: { type: "string", minLength: 1, maxLength: 500 },
+    webview_index: { type: "integer", minimum: 0, maximum: 100 },
+    input_value: { type: "string", maxLength: 10000 }
   }
 } as const;
 
@@ -79,6 +95,7 @@ export interface DiscoveryObservation {
 export interface DiscoveryObserver {
   observe(session: DiscoverySession): Promise<DiscoveryEvent[]>;
   observeWithEvidence?(session: DiscoverySession): Promise<DiscoveryObservation>;
+  executeAction?(session: DiscoverySession, request: DiscoveryActionRequest): Promise<DiscoveryEvent>;
   close?(): Promise<void>;
 }
 export interface AppOptions {
@@ -91,6 +108,7 @@ export interface AppOptions {
   uploadUrlTtlSeconds?: number;
   downloadUrlTtlSeconds?: number;
   maxEvidenceBytes?: number;
+  allowMobileActions?: boolean;
   onClose?: () => Promise<void>;
 }
 
@@ -109,6 +127,22 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     await options.onClose?.();
   });
   app.get("/health", async () => ({ status: "ok", service: "reverse-screen" }));
+  const actionQueues = new Map<string, Promise<void>>();
+  const withSessionActionLock = async <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
+    const previous = actionQueues.get(sessionId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const queued = previous.then(() => gate);
+    actionQueues.set(sessionId, queued);
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+      if (actionQueues.get(sessionId) === queued) actionQueues.delete(sessionId);
+    }
+  };
+
 
   app.post<{ Body: { application_id: string; platform: "web" | "android" | "ios" | "hybrid"; target_id: string } }>(
     "/v1/discovery-sessions", { schema: { body: createSessionSchema } },
@@ -180,6 +214,85 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       return reply.code(502).send({ error: "discovery_observation_failed", message: reason });
     }
   });
+  app.post<{ Params: { sessionId: string }; Body: DiscoveryActionRequest }>(
+    "/v1/discovery-sessions/:sessionId/actions", { schema: { body: executeActionSchema } },
+    async (request, reply) => withSessionActionLock(request.params.sessionId, async () => {
+      if (!options.allowMobileActions || !options.observer?.executeAction) {
+        return reply.code(501).send({ error: "mobile_action_execution_disabled" });
+      }
+      const current = await sessions.get(request.params.sessionId);
+      if (!current) return reply.code(404).send({ error: "discovery_session_not_found" });
+      if (current.status !== "completed") return reply.code(409).send({ error: "discovery_session_must_be_completed_before_actions" });
+      const action = request.body;
+      if (action.locator_strategy === "role_name" && (!action.locator_role || !action.locator_name)) {
+        return reply.code(400).send({ error: "action_role_locator_incomplete" });
+      }
+      if (action.locator_strategy !== "role_name" && !action.locator_value) {
+        return reply.code(400).send({ error: "action_locator_value_required" });
+      }
+      if (action.action === "fill" && action.input_value === undefined) {
+        return reply.code(400).send({ error: "action_input_value_required" });
+      }
+      if (action.action === "tap" && action.input_value !== undefined) {
+        return reply.code(400).send({ error: "action_input_value_not_allowed_for_tap" });
+      }
+      if (action.context_type === "webview" && current.platform !== "ios" && current.platform !== "android") {
+        return reply.code(409).send({ error: "webview_actions_require_mobile_session" });
+      }
+
+      const existing = await store.listBySession(current.session_id);
+      let nextSequence = existing.reduce((max, event) => Math.max(max, event.sequence), 0) + 1;
+      try {
+        const executed = await options.observer.executeAction(current, action);
+        const acceptedAction = await store.append({ ...executed, sequence: nextSequence++ });
+        let observed: DiscoveryEvent[];
+        try {
+          observed = await options.observer.observe(current);
+        } catch {
+          const failureEvent: DiscoveryEvent = {
+            event_id: randomUUID(), session_id: current.session_id, sequence: nextSequence++,
+            event_type: "error", occurred_at: new Date().toISOString(), platform: current.platform,
+            payload: {
+              operation: "post_action_observation",
+              action_event_id: acceptedAction.event.event_id,
+              error_code: "post_action_observation_failed"
+            }
+          };
+          await store.append(failureEvent);
+          return reply.code(502).send({
+            error: "post_action_observation_failed",
+            action_event_id: acceptedAction.event.event_id
+          });
+        }
+        const acceptedObservation = [];
+        for (const event of observed) {
+          acceptedObservation.push(await store.append({
+            ...event,
+            sequence: nextSequence++,
+            payload: { ...event.payload, observation_phase: "post_action" }
+          }));
+        }
+        return reply.code(201).send({
+          action: acceptedAction.event,
+          observation_events: acceptedObservation.map((item) => item.event)
+        });
+      } catch {
+        const failureEvent: DiscoveryEvent = {
+          event_id: randomUUID(), session_id: current.session_id, sequence: nextSequence,
+          event_type: "error", occurred_at: new Date().toISOString(), platform: current.platform,
+          payload: {
+            operation: "execute_action",
+            context_type: action.context_type,
+            action: action.action,
+            locator_strategy: action.locator_strategy,
+            error_code: "action_execution_failed"
+          }
+        };
+        await store.append(failureEvent);
+        return reply.code(502).send({ error: "discovery_action_failed", event_id: failureEvent.event_id });
+      }
+    })
+  );
   app.post<{ Params: { sessionId: string }; Body: { status: "running" | "completed" | "failed" | "cancelled"; failure_reason?: string } }>(
     "/v1/discovery-sessions/:sessionId/transitions", { schema: { body: transitionSchema } },
     async (request, reply) => {
