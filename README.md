@@ -209,4 +209,4 @@ Event ingestion is idempotent by `event_id`; PostgreSQL additionally enforces un
 
 - Mobile action execution is opt-in via `MOBILE_ACTION_EXECUTION_ENABLED=true` and an explicit `authorizeMobileAction` policy. Missing, rejecting, or failing authorization denies execution; fill values are omitted from the policy context and discovery events. The host must supply trusted authentication and enforce session ownership, tenant isolation, and application-specific action policy. Other API routes remain unauthenticated.
 - In-memory mode is intended for tests/local exploration, not multi-process production use.
-- Real-device and simulator E2E validation is still required; CI currently covers fake-driver/unit tests.
+- A live native-action smoke check passed on iPhone 17 Pro (iOS 26.3) and Samsung SM-N981N (Android), using the built-in Settings app to observe, tap a discovered navigation control, and observe the changed screen. Target-application flows, hybrid WebView actions, and CI coverage on mobile devices still require validation; automated tests currently use fake drivers.

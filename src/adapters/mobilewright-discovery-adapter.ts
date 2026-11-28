@@ -64,7 +64,7 @@ interface MobilewrightDevice {
   screenSize(): Promise<{ width: number; height: number; scale: number }>;
   close(): Promise<void>;
 }
-interface LaunchOptions { deviceId: string; bundleId: string; installApps?: string | string[]; }
+interface LaunchOptions { deviceId: string; bundleId: string; installApps?: string | string[]; autoAppLaunch?: boolean; }
 interface Launcher { launch(options: LaunchOptions): Promise<MobilewrightDevice>; }
 interface LauncherFactory { ios: Launcher; android: Launcher; }
 const defaultFactory = { ios: ios as unknown as Launcher, android: android as unknown as Launcher } satisfies LauncherFactory;
@@ -158,6 +158,7 @@ export class MobilewrightDiscoveryAdapter {
     const device = await launcher.launch({
       deviceId: session.target_id,
       bundleId: this.options.bundleId,
+      autoAppLaunch: false,
       ...(this.options.installAppPath ? { installApps: this.options.installAppPath } : {})
     });
     let page: WebPage | undefined;
@@ -221,6 +222,7 @@ export class MobilewrightDiscoveryAdapter {
     const device = await launcher.launch({
       deviceId: session.target_id,
       bundleId: this.options.bundleId,
+      autoAppLaunch: session.status === "running",
       ...(this.options.installAppPath ? { installApps: this.options.installAppPath } : {})
     });
     try {

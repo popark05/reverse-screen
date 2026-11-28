@@ -70,6 +70,7 @@ test("Mobilewright discovery emits native and WebView contexts in one ordered se
 });
 
 test("native-only apps complete discovery when no WebView is present", async () => {
+  const launchModes: (boolean | undefined)[] = [];
   const device = {
     id: "emulator-5554",
     screen: { viewTree: async () => [], getByWebView: () => ({ count: async () => 0 }), screenshot: async () => Buffer.from("png") },
@@ -77,12 +78,15 @@ test("native-only apps complete discovery when no WebView is present", async () 
     screenSize: async () => ({ width: 1, height: 1, scale: 1 }), close: async () => {}
   };
   const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "com.example.app" }, {
-    ios: { launch: async () => device as never }, android: { launch: async () => device as never }
+    ios: { launch: async () => device as never },
+    android: { launch: async (options) => { launchModes.push(options.autoAppLaunch); return device as never; } }
   });
   const events = await adapter.observe(session);
   assert.equal(events.length, 1);
   assert.equal(events[0]?.payload.context_type, "native");
   assert.equal(events.some((event) => event.event_type === "transition_observed"), false);
+  await adapter.observe({ ...session, status: "completed" });
+  assert.deepEqual(launchModes, [true, false], "only the initial observation should launch the app");
 });
 
 test("Mobilewright discovery rejects unsupported platforms and requires bundle identifier", async () => {
