@@ -47,6 +47,7 @@ const app = buildApp({
   sessions: repository ?? new InMemoryDiscoverySessionStore(),
   evidence: evidenceRepository ?? new InMemoryEvidenceArtifactStore(),
   ...(observer ? { observer } : {}),
+  allowMobileActions: process.env.MOBILE_ACTION_EXECUTION_ENABLED === "true",
   ...(objectStorage ? {
     objectStorage,
     objectStorageBucket: s3Bucket!,
