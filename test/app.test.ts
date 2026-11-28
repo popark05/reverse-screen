@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockDiscoveryEvents } from "../src/adapters/mock-adapter.js";
 import { buildApp } from "../src/server/app.js";
+import type { DiscoverySession } from "../src/domain/discovery-session.js";
+import type { DiscoveryActionRequest } from "../src/domain/discovery-action.js";
 
 const sessionId = "b6a3f8e4-4a1d-4c0d-9e1a-1e5e6c7d8f90";
 
@@ -77,12 +79,12 @@ test("invalid platform and malformed identifiers are rejected", async () => {
 test("mobile action execution is opt-in and appends action plus post-action observation events", async () => {
   let observeCount = 0;
   const observer = {
-    observe: async (session: { session_id: string; platform: "android" }) => [{
+    observe: async (session: DiscoverySession) => [{
       event_id: `event-${++observeCount}`, session_id: session.session_id, sequence: 1,
       event_type: "screen_observed" as const, occurred_at: "2026-11-28T00:00:00.000Z",
       platform: session.platform, payload: { context_type: "native" }
     }],
-    executeAction: async (session: { session_id: string; platform: "android" }, request: { action: string; context_type: string }) => ({
+    executeAction: async (session: DiscoverySession, request: DiscoveryActionRequest) => ({
       event_id: "action-event", session_id: session.session_id, sequence: 1,
       event_type: "action_executed" as const, occurred_at: "2026-11-28T00:00:01.000Z",
       platform: session.platform,
