@@ -203,7 +203,7 @@ export class PlaywrightDiscoveryAdapter {
             children: Array.from(element.children).filter((child): child is HTMLElement => child instanceof HTMLElement).map(buildNode)
           };
         };
-        return { html: clone.outerHTML, accessibilityTree: buildNode(body) };
+        return { html: clone.outerHTML, accessibilityTree: buildNode(body as HTMLElement) };
       })
     ]);
     const capturedAt = screenEvent.occurred_at;
