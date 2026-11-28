@@ -42,7 +42,7 @@ const createSessionSchema = {
 
 const executeActionSchema = {
   type: "object", additionalProperties: false,
-  required: ["context_type", "action", "locator_strategy"],
+  required: ["context_type", "action", "locator_strategy", "screen_id", "state_id", "target_element_key"],
   properties: {
     context_type: { type: "string", enum: ["native", "webview"] },
     action: { type: "string", enum: ["tap", "fill"] },
@@ -244,6 +244,27 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       }
 
       const existing = await store.listBySession(current.session_id);
+      const latestScreen = [...existing].reverse().find((event) =>
+        event.event_type === "screen_observed" &&
+        event.payload.context_type === action.context_type &&
+        (action.context_type !== "webview" || event.payload.webview_index === (action.webview_index ?? 0))
+      );
+      const candidate = existing.find((event) =>
+        event.event_type === "action_candidate" &&
+        event.screen_id === action.screen_id &&
+        event.state_id === action.state_id &&
+        event.screen_id === latestScreen?.screen_id &&
+        event.payload.target_element_key === action.target_element_key &&
+        event.payload.context_type === action.context_type &&
+        event.payload.action === action.action &&
+        event.payload.enabled === true &&
+        event.payload.locator_strategy === action.locator_strategy &&
+        event.payload.locator_value === action.locator_value &&
+        event.payload.locator_role === action.locator_role &&
+        event.payload.locator_name === action.locator_name &&
+        (action.context_type !== "webview" || event.payload.webview_index === (action.webview_index ?? 0))
+      );
+      if (!candidate) return reply.code(409).send({ error: "action_candidate_missing_or_stale" });
       let nextSequence = existing.reduce((max, event) => Math.max(max, event.sequence), 0) + 1;
       try {
         const executed = await options.observer.executeAction(current, action);
