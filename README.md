@@ -33,8 +33,10 @@ A single Discovery Session therefore emits:
 - `screen_observed` and `element_observed` events with `payload.context_type = "native"` for the native accessibility hierarchy
 - corresponding events with `payload.context_type = "webview"` for semantic DOM roles, URL/title, element bounds and locator candidates
 - each discovered WebView screen carries `parent_screen_id` and `parent_state_id` references to the native host context
-- a `transition_observed` event with `transition_kind = "context_attachment"` links the native host screen/state to the embedded WebView screen/state, with a stable `transition_id`
+- a `transition_observed` event with `transition_kind = "context_attachment"` links the native host screen/state to the embedded WebView screen/state, with a lifecycle-scoped `transition_id`
 - WebView screen metadata includes a SHA-256 hash of the DOM snapshot, not the raw HTML
+- repeated observations in the same discovery session retain a stable WebView context key and report first/last observation timestamps and observation count
+- a complete observation that no longer contains a previously active WebView emits `context_detachment` linked to the original attachment transition
 
 The session's `platform` remains the device OS (`android` or `ios`); `context_type` distinguishes native and embedded web content. This avoids treating a hybrid app as a third device operating system. Editable values are not emitted. WebView textboxes are recorded as metadata only, without reading their current values. The HTML snapshot is hashed in memory and discarded.
 
@@ -173,6 +175,7 @@ Event ingestion is idempotent by `event_id`; PostgreSQL additionally enforces un
 - Authentication, tenant isolation, authorization for session ownership, bucket lifecycle/retention policies and migration orchestration are not implemented.
 - The upload URL itself is not persisted as an upload-intent record. Confirmation is bound to the generated evidence ID and session-scoped object key, but callers still require authenticated access control before production exposure.
 - Mobilewright native screenshot capture is implemented; video recording and persisted raw DOM snapshots are not yet integrated. DOM snapshot contents are not stored by the adapter; only their SHA-256 digest and summary metadata are emitted.
-- Hybrid context attachment is now represented as a directed native-to-WebView `transition_observed` event. This describes the embedded-context relationship found during one observation, not a user-triggered navigation or a verified runtime handoff. The adapter does not yet execute coordinated actions, observe WebView-to-native returns, or correlate context changes across multiple observations.
+- Hybrid attachment and detachment are tracked across repeated observations within the lifetime of one adapter process. A detachment means that a WebView was absent from a complete observation; it is not proof of a user-triggered back action or verified navigation. Failed/incomplete WebView enumeration does not close contexts. Lifecycle state is in-memory and is not restored after process restart.
+- Coordinated action execution across native and WebView contexts is not implemented. Simulator and physical-device E2E validation is still required.
 - In-memory mode is intended for tests/local exploration, not multi-process production use.
 - Real-device and simulator E2E validation is still required; CI currently covers fake-driver/unit tests.
