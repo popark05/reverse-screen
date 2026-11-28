@@ -51,3 +51,42 @@ test("Playwright discovery bounds the number of elements in one observation", as
   assert.equal(events[0]?.payload.truncated, true);
   assert.equal(events.filter((event) => event.event_type === "element_observed").length, 2);
 });
+
+
+test("Playwright discovery captures a PNG screenshot linked to its screen event", async () => {
+  const screenshot = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const page = {
+    url: () => "https://example.test/dashboard",
+    title: () => "Dashboard",
+    locator: () => ({
+      evaluateAll: async () => [],
+      evaluate: async () => ({
+        html: '<main><input value="[REDACTED]"></main>',
+        accessibilityTree: { role: "generic", tag: "body", visible: true, enabled: true, children: [] }
+      })
+    }),
+    screenshot: async (options: { type: "png" }) => {
+      assert.equal(options.type, "png");
+      return screenshot;
+    }
+  } as unknown as Page;
+  const adapter = new PlaywrightDiscoveryAdapter(page, {
+    sessionId: "b6a3f8e4-4a1d-4c0d-9e1a-1e5e6c7d8f90",
+    applicationId: "sample-app",
+    targetId: "chromium"
+  });
+
+  const observation = await adapter.observeWithEvidence();
+  assert.equal(observation.events[0]?.event_type, "screen_observed");
+  assert.equal(observation.evidence.length, 3);
+  assert.equal(observation.evidence[0]?.kind, "screenshot");
+  assert.equal(observation.evidence[0]?.content_type, "image/png");
+  assert.equal(observation.evidence[0]?.event_id, observation.events[0]?.event_id);
+  assert.deepEqual(observation.evidence[0]?.bytes, screenshot);
+  assert.equal(observation.evidence[1]?.kind, "dom_snapshot");
+  assert.equal(observation.evidence[1]?.content_type, "text/html; charset=utf-8");
+  assert.equal(Buffer.from(observation.evidence[1]!.bytes).toString("utf8").includes("[REDACTED]"), true);
+  assert.equal(observation.evidence[2]?.kind, "accessibility_tree");
+  assert.equal(observation.evidence[2]?.content_type, "application/json");
+  assert.equal(observation.evidence[2]?.event_id, observation.events[0]?.event_id);
+});
