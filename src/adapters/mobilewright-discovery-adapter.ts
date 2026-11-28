@@ -145,8 +145,13 @@ export class MobilewrightDiscoveryAdapter {
       const observedAt = new Date().toISOString();
       const events: DiscoveryEvent[] = [];
       let sequence = 0;
-      const addEvent = (input: Omit<DiscoveryEvent, "event_id" | "session_id" | "sequence" | "platform">): void => {
-        events.push({ ...input, event_id: randomUUID(), session_id: session.session_id, sequence: ++sequence, platform: session.platform as Platform });
+      const addEvent = (input: Omit<DiscoveryEvent, "event_id" | "session_id" | "sequence" | "platform">): DiscoveryEvent => {
+        const event: DiscoveryEvent = {
+          ...input, event_id: randomUUID(), session_id: session.session_id,
+          sequence: ++sequence, platform: session.platform as Platform
+        };
+        events.push(event);
+        return event;
       };
 
       let screenshot: Buffer | undefined;
@@ -210,7 +215,7 @@ export class MobilewrightDiscoveryAdapter {
         });
       }
 
-      await this.observeWebViews(device, session, observedAt, addEvent);
+      await this.observeWebViews(device, session, observedAt, nativeScreenId, nativeStateId, addEvent);
       return { events, evidence };
     } finally {
       await device.close();
@@ -221,7 +226,9 @@ export class MobilewrightDiscoveryAdapter {
     device: MobilewrightDevice,
     session: DiscoverySession,
     observedAt: string,
-    addEvent: (input: Omit<DiscoveryEvent, "event_id" | "session_id" | "sequence" | "platform">) => void
+    nativeScreenId: string,
+    nativeStateId: string,
+    addEvent: (input: Omit<DiscoveryEvent, "event_id" | "session_id" | "sequence" | "platform">) => DiscoveryEvent
   ): Promise<void> {
     let webViewCount = 0;
     try { webViewCount = await device.screen.getByWebView().count(); }
@@ -237,15 +244,38 @@ export class MobilewrightDiscoveryAdapter {
         const screenId = randomUUID();
         const stateId = randomUUID();
         const snapshotHash = createHash("sha256").update(html).digest("hex");
-        addEvent({
+        const webScreenEvent = addEvent({
           event_type: "screen_observed", screen_id: screenId, state_id: stateId, occurred_at: observedAt,
           payload: {
-            context_type: "webview", parent_context_type: "native", webview_index: index,
+            context_type: "webview", parent_context_type: "native",
+            parent_screen_id: nativeScreenId, parent_state_id: nativeStateId, webview_index: index,
             application_id: session.application_id, target_id: session.target_id, url, title,
             screen_key: `webview:${stableKey([session.platform, url, title, snapshotHash].join("|"))}`,
             dom_snapshot_sha256: snapshotHash, dom_element_count: domCount,
             observed_element_count: Math.min(domCount, maxElements), truncated: domCount > maxElements,
             observation_source: "mobilewright_webview_dom"
+          }
+        });
+        addEvent({
+          event_type: "transition_observed",
+          screen_id: nativeScreenId,
+          state_id: nativeStateId,
+          transition_id: randomUUID(),
+          occurred_at: observedAt,
+          payload: {
+            context_type: "hybrid",
+            transition_kind: "context_attachment",
+            direction: "native_to_webview",
+            source_context_type: "native",
+            target_context_type: "webview",
+            source_screen_id: nativeScreenId,
+            source_state_id: nativeStateId,
+            target_screen_id: webScreenEvent.screen_id,
+            target_state_id: webScreenEvent.state_id,
+            webview_index: index,
+            relationship: "embedded_context",
+            navigation_verified: false,
+            observation_source: "mobilewright_webview_attachment"
           }
         });
         let observed = 0;
