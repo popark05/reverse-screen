@@ -59,7 +59,11 @@ test("Playwright discovery captures a PNG screenshot linked to its screen event"
     url: () => "https://example.test/dashboard",
     title: () => "Dashboard",
     locator: () => ({
-      evaluateAll: async () => []
+      evaluateAll: async () => [],
+      evaluate: async () => ({
+        html: '<main><input value="[REDACTED]"></main>',
+        accessibilityTree: { role: "generic", tag: "body", visible: true, enabled: true, children: [] }
+      })
     }),
     screenshot: async (options: { type: "png" }) => {
       assert.equal(options.type, "png");
@@ -74,9 +78,15 @@ test("Playwright discovery captures a PNG screenshot linked to its screen event"
 
   const observation = await adapter.observeWithEvidence();
   assert.equal(observation.events[0]?.event_type, "screen_observed");
-  assert.equal(observation.evidence.length, 1);
+  assert.equal(observation.evidence.length, 3);
   assert.equal(observation.evidence[0]?.kind, "screenshot");
   assert.equal(observation.evidence[0]?.content_type, "image/png");
   assert.equal(observation.evidence[0]?.event_id, observation.events[0]?.event_id);
   assert.deepEqual(observation.evidence[0]?.bytes, screenshot);
+  assert.equal(observation.evidence[1]?.kind, "dom_snapshot");
+  assert.equal(observation.evidence[1]?.content_type, "text/html; charset=utf-8");
+  assert.match(Buffer.from(observation.evidence[1]!.bytes).toString("utf8"), /\\[REDACTED\\]/);
+  assert.equal(observation.evidence[2]?.kind, "accessibility_tree");
+  assert.equal(observation.evidence[2]?.content_type, "application/json");
+  assert.equal(observation.evidence[2]?.event_id, observation.events[0]?.event_id);
 });
