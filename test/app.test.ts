@@ -192,3 +192,13 @@ test("mobile action execution is opt-in and appends action plus post-action obse
   assert.equal(JSON.stringify(transition).includes("secret@example.test"), false);
   await enabledApp.close();
 });
+
+test("rejects unknown fields instead of silently dropping them", async () => {
+  const app = buildApp();
+  const response = await app.inject({
+    method: "POST", url: "/v1/discovery-sessions",
+    payload: { application_id: "sample-app", platform: "android", target_id: "emulator-5554", targetId: "typo" }
+  });
+  assert.equal(response.statusCode, 400);
+  await app.close();
+});

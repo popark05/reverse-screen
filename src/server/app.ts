@@ -187,7 +187,12 @@ function buildActionTransition(
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: true,
+    // Fastify strips properties not allowed by `additionalProperties: false` by default; reject them instead
+    // so typos and unsupported fields surface as 400 rather than being silently dropped.
+    ajv: { customOptions: { removeAdditional: false } }
+  });
   const store = options.store ?? new InMemoryDiscoveryEventStore();
   const sessions = options.sessions ?? new InMemoryDiscoverySessionStore();
   const evidence = options.evidence ?? new InMemoryEvidenceArtifactStore();
