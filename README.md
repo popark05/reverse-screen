@@ -173,6 +173,10 @@ Event ingestion is idempotent by `event_id`; PostgreSQL additionally enforces un
 - Authentication, tenant isolation, authorization for session ownership, bucket lifecycle/retention policies and migration orchestration are not implemented.
 - The upload URL itself is not persisted as an upload-intent record. Confirmation is bound to the generated evidence ID and session-scoped object key, but callers still require authenticated access control before production exposure.
 - Mobilewright native screenshot capture is implemented; video recording and persisted raw DOM snapshots are not yet integrated. DOM snapshot contents are not stored by the adapter; only their SHA-256 digest and summary metadata are emitted.
+
+- Repeated calls to the Mobilewright adapter within the same discovery session retain an in-memory WebView context instance ID by WebView slot. They emit `context_persisted` when that slot is observed again and `context_detachment` when a successful enumeration no longer contains it. These lifecycle events describe observed presence/absence only; slot reuse, navigation causality, and user-triggered return-to-native behavior are not verified.
+- The lifecycle tracker is process-local and adapter-instance-local. The current HTTP observe endpoint still performs a single observation per session; durable multi-round orchestration and coordinated native/WebView action execution remain future work.
+
 - Hybrid context attachment is now represented as a directed native-to-WebView `transition_observed` event. This describes the embedded-context relationship found during one observation, not a user-triggered navigation or a verified runtime handoff. The adapter does not yet execute coordinated actions, observe WebView-to-native returns, or correlate context changes across multiple observations.
 - In-memory mode is intended for tests/local exploration, not multi-process production use.
 - Real-device and simulator E2E validation is still required; CI currently covers fake-driver/unit tests.

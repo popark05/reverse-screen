@@ -119,3 +119,46 @@ test("observeWithEvidence captures a PNG screenshot and associates it with the n
   assert.deepEqual(result.evidence[0]?.bytes, screenshot);
   assert.equal(result.evidence[0]?.event_id, result.events[0]?.event_id);
 });
+
+
+test("repeated observations track WebView continuity and report disappearance without claiming verified navigation", async () => {
+  let webViewCount = 1;
+  let url = "https://app.example.test/checkout";
+  const device = {
+    id: "emulator-5554",
+    screen: {
+      viewTree: async () => [],
+      getByWebView: () => ({ count: async () => webViewCount, nth: () => ({ page: async () => ({
+        url: () => url, title: async () => "Checkout", content: async () => "<html></html>",
+        locator: () => ({ count: async () => 0 }), getByRole: () => ({ count: async () => 0 }),
+        close: async () => {}
+      }) }) }),
+      screenshot: async () => Buffer.from("png")
+    },
+    getForegroundApp: async () => ({ bundleId: "com.example.app" }),
+    screenSize: async () => ({ width: 1, height: 1, scale: 1 }),
+    close: async () => {}
+  };
+  const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "com.example.app" }, {
+    ios: { launch: async () => device as never }, android: { launch: async () => device as never }
+  });
+  const first = await adapter.observe(session);
+  const firstAttachment = first.find((event) => event.event_type === "transition_observed");
+  const contextInstanceId = firstAttachment?.payload.context_instance_id;
+  assert.ok(contextInstanceId);
+
+  url = "https://app.example.test/checkout/confirm";
+  const second = await adapter.observe(session);
+  const persisted = second.find((event) => event.event_type === "transition_observed" && event.payload.transition_kind === "context_persisted");
+  assert.equal(persisted?.payload.context_instance_id, contextInstanceId);
+  assert.equal(persisted?.payload.previous_url, "https://app.example.test/checkout");
+  assert.equal(persisted?.payload.current_url, url);
+  assert.equal(persisted?.payload.navigation_verified, false);
+
+  webViewCount = 0;
+  const third = await adapter.observe(session);
+  const detached = third.find((event) => event.event_type === "transition_observed" && event.payload.transition_kind === "context_detachment");
+  assert.equal(detached?.payload.context_instance_id, contextInstanceId);
+  assert.equal(detached?.payload.direction, "webview_to_native");
+  assert.equal(detached?.payload.navigation_verified, false);
+});
