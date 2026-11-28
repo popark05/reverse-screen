@@ -90,7 +90,7 @@ test("web discovery persists screenshot, DOM snapshot, and accessibility tree ar
     url: `/v1/discovery-sessions/${sessionId}/evidence`
   });
   const artifacts = listed.json().items as Array<{
-    kind: string; content_type: string; byte_size: number; sha256: string; event_id: string;
+    evidence_id: string; kind: string; content_type: string; byte_size: number; sha256: string; event_id: string;
   }>;
   assert.equal(artifacts.length, 3);
   assert.deepEqual(artifacts.map((item) => item.kind).sort(), [
@@ -100,7 +100,7 @@ test("web discovery persists screenshot, DOM snapshot, and accessibility tree ar
   assert.equal(storage.objects.size, 3);
 
   for (const artifact of artifacts) {
-    const key = `evidence/${sessionId}/${listed.json().items.find((item: { evidence_id: string }) => item.evidence_id === artifact.evidence_id)?.evidence_id}`;
+    const key = `evidence/${sessionId}/${artifact.evidence_id}`;
     const stored = storage.objects.get(key);
     assert.ok(stored);
     assert.equal(stored.contentType, artifact.content_type);
