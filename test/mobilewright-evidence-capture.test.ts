@@ -40,7 +40,8 @@ test("discovery observation uploads captured screenshot and links evidence to sc
       };
     }
   };
-  const app = buildApp({ observer, objectStorage: storage, objectStorageBucket: "reverse-screen" });
+  const serviceToken = "qa-platform-service-token-012345678901234567890123";
+  const app = buildApp({ observer, objectStorage: storage, objectStorageBucket: "reverse-screen", authorizeEvidenceRead: ({ authorization }) => authorization === `Bearer ${serviceToken}` });
   const created = await app.inject({
     method: "POST", url: "/v1/discovery-sessions",
     payload: { application_id: "sample-app", platform: "android", target_id: "emulator-5554" }
@@ -52,7 +53,7 @@ test("discovery observation uploads captured screenshot and links evidence to sc
   assert.equal(response.json().evidence_count, 1);
   const event = response.json().events[0];
   assert.equal(event.evidence_ids.length, 1);
-  const listed = await app.inject({ method: "GET", url: `/v1/discovery-sessions/${sessionId}/evidence` });
+  const listed = await app.inject({ method: "GET", url: `/v1/discovery-sessions/${sessionId}/evidence`, headers: { authorization: "Bearer qa-platform-service-token-012345678901234567890123" } });
   assert.equal(listed.json().items.length, 1);
   const artifact = listed.json().items[0];
   assert.equal(artifact.event_id, screenEvent.event_id);

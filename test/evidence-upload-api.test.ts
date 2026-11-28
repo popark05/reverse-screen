@@ -18,7 +18,11 @@ class FakeObjectStorage implements ObjectStorage {
 
 test("evidence upload is confirmed against object size, content type and SHA-256 before registration", async () => {
   const storage = new FakeObjectStorage();
-  const app = buildApp({ objectStorage: storage, uploadUrlTtlSeconds: 240, downloadUrlTtlSeconds: 120 });
+  const serviceToken = "qa-platform-service-token-012345678901234567890123";
+  const app = buildApp({
+    objectStorage: storage, uploadUrlTtlSeconds: 240, downloadUrlTtlSeconds: 120,
+    authorizeEvidenceRead: ({ authorization }) => authorization === `Bearer ${serviceToken}`
+  });
   const session = await app.inject({
     method: "POST", url: "/v1/discovery-sessions",
     payload: { application_id: "sample-app", platform: "android", target_id: "emulator-5554" }
@@ -42,7 +46,7 @@ test("evidence upload is confirmed against object size, content type and SHA-256
   assert.equal(confirmed.statusCode, 201);
   assert.equal(confirmed.json().storage_uri, `s3://reverse-screen/evidence/${sessionId}/${evidenceId}`);
 
-  const download = await app.inject({ method: "GET", url: `/v1/evidence-artifacts/${evidenceId}/download-url` });
+  const download = await app.inject({ method: "GET", url: `/v1/evidence-artifacts/${evidenceId}/download-url`, headers: { authorization: `Bearer ${serviceToken}` } });
   assert.equal(download.statusCode, 200);
   assert.ok(download.json().download_url.includes("download=fake"));
   await app.close();

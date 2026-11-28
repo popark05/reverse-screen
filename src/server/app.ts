@@ -107,6 +107,7 @@ export interface MobileActionAuthorizationContext {
   headers: Readonly<Record<string, string | string[] | undefined>>;
 }
 export type MobileActionAuthorizer = (context: MobileActionAuthorizationContext) => boolean | Promise<boolean>;
+export type EvidenceReadAuthorizer = (headers: Readonly<Record<string, string | string[] | undefined>>) => boolean | Promise<boolean>;
 export interface AppOptions {
   store?: DiscoveryEventStore;
   sessions?: DiscoverySessionRepository;
@@ -119,6 +120,7 @@ export interface AppOptions {
   maxEvidenceBytes?: number;
   allowMobileActions?: boolean;
   authorizeMobileAction?: MobileActionAuthorizer;
+  authorizeEvidenceRead?: EvidenceReadAuthorizer;
   onClose?: () => Promise<void>;
 }
 
@@ -131,6 +133,13 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const downloadTtl = options.downloadUrlTtlSeconds ?? 300;
   const maxEvidenceBytes = options.maxEvidenceBytes ?? 20 * 1024 * 1024;
   const bucket = options.objectStorageBucket ?? "reverse-screen";
+  const evidenceReadAuthorized = async (
+    headers: Readonly<Record<string, string | string[] | undefined>>
+  ): Promise<"authorized" | "not_configured" | "denied"> => {
+    if (!options.authorizeEvidenceRead) return "not_configured";
+    try { return await options.authorizeEvidenceRead(headers) ? "authorized" : "denied"; }
+    catch { return "denied"; }
+  };
 
   app.addHook("onClose", async () => {
     await options.observer?.close?.();
@@ -419,6 +428,9 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   );
 
   app.get<{ Params: { evidenceId: string } }>("/v1/evidence-artifacts/:evidenceId/download-url", async (request, reply) => {
+    const access = await evidenceReadAuthorized(request.headers);
+    if (access === "not_configured") return reply.code(503).send({ error: "evidence_read_auth_not_configured" });
+    if (access === "denied") return reply.code(401).send({ error: "service_authentication_required" });
     if (!options.objectStorage) return reply.code(501).send({ error: "object_storage_not_configured" });
     const artifact = await evidence.get(request.params.evidenceId);
     if (!artifact) return reply.code(404).send({ error: "evidence_artifact_not_found" });
@@ -435,11 +447,17 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   });
 
   app.get<{ Params: { evidenceId: string } }>("/v1/evidence-artifacts/:evidenceId", async (request, reply) => {
+    const access = await evidenceReadAuthorized(request.headers);
+    if (access === "not_configured") return reply.code(503).send({ error: "evidence_read_auth_not_configured" });
+    if (access === "denied") return reply.code(401).send({ error: "service_authentication_required" });
     const artifact = await evidence.get(request.params.evidenceId);
     if (!artifact) return reply.code(404).send({ error: "evidence_artifact_not_found" });
     return artifact;
   });
   app.get<{ Params: { sessionId: string } }>("/v1/discovery-sessions/:sessionId/evidence", async (request, reply) => {
+    const access = await evidenceReadAuthorized(request.headers);
+    if (access === "not_configured") return reply.code(503).send({ error: "evidence_read_auth_not_configured" });
+    if (access === "denied") return reply.code(401).send({ error: "service_authentication_required" });
     const session = await sessions.get(request.params.sessionId);
     if (!session) return reply.code(404).send({ error: "discovery_session_not_found" });
     return { session_id: request.params.sessionId, items: await evidence.listBySession(request.params.sessionId) };
