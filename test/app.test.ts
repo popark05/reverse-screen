@@ -137,7 +137,7 @@ test("mobile action execution is opt-in and appends action plus post-action obse
   await enabledApp.inject({ method: "POST", url: `/v1/discovery-sessions/${enabledSessionId}/observe` });
   const action = await enabledApp.inject({
     method: "POST", url: `/v1/discovery-sessions/${enabledSessionId}/actions`,
-    payload: { context_type: "native", action: "fill", locator_strategy: "label", locator_value: "Email", input_value: "secret@example.test" }
+    payload: { context_type: "native", action: "fill", locator_strategy: "label", locator_value: "Email", input_value: "secret@example.test", screen_id: "11111111-1111-4111-8111-111111111111", state_id: "22222222-2222-4222-8222-222222222222", target_element_key: "native-element:email" }
   });
   assert.equal(action.statusCode, 201);
   assert.equal(action.json().action.event_type, "action_executed");
