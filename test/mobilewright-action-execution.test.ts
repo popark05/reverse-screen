@@ -44,7 +44,8 @@ test("executes native tap actions through Mobilewright locators", async () => {
 
 test("executes WebView fill actions without recording the entered value", async () => {
   const calls: string[] = [];
-  const webLocator = {
+  let webLocator: any;
+  webLocator = {
     count: async () => 1, nth: () => webLocator,
     getAttribute: async () => null, innerText: async () => "",
     boundingBox: async () => null, isVisible: async () => true, isEnabled: async () => true,
