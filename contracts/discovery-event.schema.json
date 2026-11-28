@@ -3,22 +3,87 @@
   "$id": "https://example.invalid/reverse-screen/discovery-event/v1/schema.json",
   "title": "Discovery Event",
   "type": "object",
-  "required": ["event_id", "session_id", "sequence", "event_type", "occurred_at", "platform", "payload"],
+  "required": [
+    "event_id",
+    "session_id",
+    "sequence",
+    "event_type",
+    "occurred_at",
+    "platform",
+    "payload"
+  ],
   "properties": {
-    "event_id": { "type": "string", "format": "uuid" },
-    "session_id": { "type": "string", "format": "uuid" },
-    "sequence": { "type": "integer", "minimum": 1 },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
     "event_type": {
       "type": "string",
-      "enum": ["screen_observed", "element_observed", "action_candidate", "action_executed", "transition_observed", "assertion_observed", "error", "session_marker"]
+      "enum": [
+        "screen_observed",
+        "element_observed",
+        "action_candidate",
+        "action_executed",
+        "transition_observed",
+        "assertion_observed",
+        "error",
+        "session_marker"
+      ]
     },
-    "occurred_at": { "type": "string", "format": "date-time" },
-    "platform": { "type": "string", "enum": ["web", "android", "ios", "hybrid"] },
-    "screen_id": { "type": ["string", "null"], "format": "uuid" },
-    "state_id": { "type": ["string", "null"], "format": "uuid" },
-    "transition_id": { "type": ["string", "null"], "format": "uuid" },
-    "payload": { "type": "object", "additionalProperties": true },
-    "evidence_ids": { "type": "array", "items": { "type": "string", "format": "uuid" } }
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "web",
+        "android",
+        "ios",
+        "hybrid"
+      ]
+    },
+    "screen_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "state_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "transition_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Event-specific metadata. Hybrid context attachment, persistence, and detachment transitions use transition_kind=context_attachment|context_persisted|context_detachment and explicitly set navigation_verified=false; lifecycle observations do not establish navigation causality."
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    }
   },
   "additionalProperties": false
 }
