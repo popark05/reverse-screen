@@ -229,10 +229,10 @@ export class MobilewrightDiscoveryAdapter {
         });
       }
 
-      const webViewObservation = await this.observeWebViews(device, session, observedAt, addEvent);
+      const webViewObservation = await this.observeWebViews(device, session, observedAt, nativeScreenId, nativeStateId, addEvent);
       if (webViewObservation?.complete) {
         const lifecycle = this.hybridContextLifecycle.reconcile(
-          session.session_id, observedAt, nativeScreenId, nativeStateId, webViewObservation.contexts
+          session.session_id, observedAt, webViewObservation.contexts
         );
         for (const item of lifecycle.active) {
           const screenEvent = events.find((event) =>
@@ -325,6 +325,8 @@ export class MobilewrightDiscoveryAdapter {
     device: MobilewrightDevice,
     session: DiscoverySession,
     observedAt: string,
+    nativeScreenId: string,
+    nativeStateId: string,
     addEvent: (input: Omit<DiscoveryEvent, "event_id" | "session_id" | "sequence" | "platform">) => DiscoveryEvent
   ): Promise<WebViewObservationResult | undefined> {
     let webViewCount = 0;
@@ -343,7 +345,7 @@ export class MobilewrightDiscoveryAdapter {
         const screenId = randomUUID();
         const stateId = randomUUID();
         const snapshotHash = createHash("sha256").update(html).digest("hex");
-        const webScreenEvent = addEvent({
+        addEvent({
           event_type: "screen_observed", screen_id: screenId, state_id: stateId, occurred_at: observedAt,
           payload: {
             context_type: "webview", parent_context_type: "native",
