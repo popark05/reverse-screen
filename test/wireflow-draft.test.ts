@@ -52,6 +52,7 @@ test("builds a wireflow import body from screens and action-driven transitions",
   assert.deepEqual(draft.nodes.map((node) => [node.nodeId, node.title]), [[HOME, "Now in Android"], [SEARCH, "Recent searches"]],
     "one node per screen, titled by its first observed name; unreferenced WebView screens are skipped");
   assert.deepEqual(draft.nodes[0]?.discoveryRef, { sourceSystem: "reverse-screen", screenId: HOME, sessionId: session.session_id });
+  assert.ok([...draft.nodes, ...draft.edges].every((item) => item.origin === "discovered"), "runtime observations are marked discovered");
 
   assert.deepEqual(draft.edges.map((edge) => [edge.fromNodeId, edge.label, edge.kind, edge.toNodeId]), [
     [HOME, "Search", "primary", SEARCH],

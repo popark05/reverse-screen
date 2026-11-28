@@ -4,7 +4,7 @@ import type { DiscoverySession } from "./discovery-session.js";
 /**
  * Request body for Wireflow Review `POST /v1/flows/import`
  * (see wireflow-review docs/architecture/flow-contract.md). Field names follow that
- * contract (camelCase); IDs are copied verbatim from Discovery Events.
+ * contract (camelCase, 1.1 for origin "discovered"); IDs are copied verbatim from Discovery Events.
  */
 export interface WireflowDraft {
   applicationId: string;
@@ -14,6 +14,7 @@ export interface WireflowDraft {
     nodeId: string;
     type: "screen";
     title: string;
+    origin: "discovered";
     discoveryRef: { sourceSystem: "reverse-screen"; screenId: string; sessionId: string };
   }>;
   edges: Array<{
@@ -23,6 +24,7 @@ export interface WireflowDraft {
     label: string;
     trigger: string;
     kind: "primary" | "back";
+    origin: "discovered";
     discoveryRef: { sourceSystem: "reverse-screen"; transitionId: string; sessionId: string };
   }>;
 }
@@ -58,7 +60,7 @@ export function buildWireflowDraft(session: DiscoverySession, events: DiscoveryE
       ? event.payload.name.trim()
       : typeof event.payload.title === "string" && event.payload.title.trim() ? event.payload.title.trim() : "Untitled screen";
     nodes.set(event.screen_id, {
-      nodeId: event.screen_id, type: "screen", title: clip(name),
+      nodeId: event.screen_id, type: "screen", title: clip(name), origin: "discovered",
       discoveryRef: { ...ref, screenId: event.screen_id }
     });
   }
@@ -78,7 +80,7 @@ export function buildWireflowDraft(session: DiscoverySession, events: DiscoveryE
       : String(payload.locator_value ?? payload.locator_name ?? action);
     edges.set(event.transition_id, {
       edgeId: `transition-${event.transition_id}`, fromNodeId: from, toNodeId: to,
-      label: clip(label), trigger: action, kind: action === "back" ? "back" : "primary",
+      label: clip(label), trigger: action, kind: action === "back" ? "back" : "primary", origin: "discovered",
       discoveryRef: { ...ref, transitionId: event.transition_id }
     });
   }
