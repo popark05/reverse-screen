@@ -79,16 +79,35 @@ test("invalid platform and malformed identifiers are rejected", async () => {
 test("mobile action execution is opt-in and appends action plus post-action observation events", async () => {
   let observeCount = 0;
   const observer = {
-    observe: async (session: DiscoverySession) => [{
-      event_id: `event-${++observeCount}`, session_id: session.session_id, sequence: 1,
-      event_type: "screen_observed" as const, occurred_at: "2026-11-28T00:00:00.000Z",
-      platform: session.platform, payload: { context_type: "native" }
-    }],
+    observe: async (session: DiscoverySession) => {
+      observeCount++;
+      const screenId = "11111111-1111-4111-8111-111111111111";
+      const stateId = "22222222-2222-4222-8222-222222222222";
+      const screen = {
+        event_id: `screen-event-${observeCount}`, session_id: session.session_id, sequence: 1,
+        event_type: "screen_observed" as const, occurred_at: "2026-11-28T00:00:00.000Z",
+        platform: session.platform, screen_id: observeCount === 1 ? screenId : "33333333-3333-4333-8333-333333333333",
+        state_id: observeCount === 1 ? stateId : "44444444-4444-4444-8444-444444444444",
+        payload: { context_type: "native" }
+      };
+      if (observeCount !== 1) return [screen];
+      return [screen, {
+        event_id: "candidate-event", session_id: session.session_id, sequence: 2,
+        event_type: "action_candidate" as const, occurred_at: "2026-11-28T00:00:00.000Z",
+        platform: session.platform, screen_id: screenId, state_id: stateId,
+        payload: {
+          context_type: "native", action: "fill", enabled: true,
+          target_element_key: "native-element:email",
+          locator_strategy: "label", locator_value: "Email"
+        }
+      }];
+    },
     executeAction: async (session: DiscoverySession, request: DiscoveryActionRequest) => ({
       event_id: "action-event", session_id: session.session_id, sequence: 1,
       event_type: "action_executed" as const, occurred_at: "2026-11-28T00:00:01.000Z",
       platform: session.platform,
-      payload: { action: request.action, context_type: request.context_type, value_redacted: request.action === "fill" }
+      screen_id: request.screen_id, state_id: request.state_id,
+      payload: { action: request.action, context_type: request.context_type, target_element_key: request.target_element_key, value_redacted: request.action === "fill" }
     })
   };
   const app = buildApp({ observer });
@@ -102,7 +121,7 @@ test("mobile action execution is opt-in and appends action plus post-action obse
 
   const disabled = await app.inject({
     method: "POST", url: `/v1/discovery-sessions/${sessionId}/actions`,
-    payload: { context_type: "native", action: "fill", locator_strategy: "label", locator_value: "Email", input_value: "secret@example.test" }
+    payload: { context_type: "native", action: "fill", locator_strategy: "label", locator_value: "Email", input_value: "secret@example.test", screen_id: "11111111-1111-4111-8111-111111111111", state_id: "22222222-2222-4222-8222-222222222222", target_element_key: "native-element:email" }
   });
   assert.equal(disabled.statusCode, 501);
   await app.close();
@@ -121,6 +140,8 @@ test("mobile action execution is opt-in and appends action plus post-action obse
   assert.equal(action.statusCode, 201);
   assert.equal(action.json().action.event_type, "action_executed");
   assert.equal(action.json().action.payload.value_redacted, true);
+  assert.equal(action.json().action.payload.target_element_key, "native-element:email");
+  assert.equal(action.json().action.screen_id, "11111111-1111-4111-8111-111111111111");
   assert.equal(JSON.stringify(action.json()).includes("secret@example.test"), false);
   assert.deepEqual(action.json().observation_events.map((event: { sequence: number }) => event.sequence), [3]);
   const events = await enabledApp.inject({ method: "GET", url: `/v1/discovery-sessions/${enabledSessionId}/events` });
