@@ -101,6 +101,12 @@ export interface DiscoveryObserver {
   executeAction?(session: DiscoverySession, request: DiscoveryActionRequest): Promise<DiscoveryEvent>;
   close?(): Promise<void>;
 }
+export interface MobileActionAuthorizationContext {
+  session: DiscoverySession;
+  action: Omit<DiscoveryActionRequest, "input_value">;
+  headers: Readonly<Record<string, string | string[] | undefined>>;
+}
+export type MobileActionAuthorizer = (context: MobileActionAuthorizationContext) => boolean | Promise<boolean>;
 export interface AppOptions {
   store?: DiscoveryEventStore;
   sessions?: DiscoverySessionRepository;
@@ -112,6 +118,7 @@ export interface AppOptions {
   downloadUrlTtlSeconds?: number;
   maxEvidenceBytes?: number;
   allowMobileActions?: boolean;
+  authorizeMobileAction?: MobileActionAuthorizer;
   onClose?: () => Promise<void>;
 }
 
@@ -227,6 +234,19 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       if (!current) return reply.code(404).send({ error: "discovery_session_not_found" });
       if (current.status !== "completed") return reply.code(409).send({ error: "discovery_session_must_be_completed_before_actions" });
       const action = request.body;
+      if (!options.authorizeMobileAction) return reply.code(403).send({ error: "mobile_action_not_authorized" });
+      const { input_value: _redactedInput, ...authorizationAction } = action;
+      let authorized = false;
+      try {
+        authorized = await options.authorizeMobileAction({
+          session: current,
+          action: authorizationAction,
+          headers: request.headers
+        });
+      } catch {
+        // Authorization failures are closed and do not expose policy errors or request data.
+      }
+      if (!authorized) return reply.code(403).send({ error: "mobile_action_not_authorized" });
       if (action.locator_strategy === "role_name" && (!action.locator_role || !action.locator_name)) {
         return reply.code(400).send({ error: "action_role_locator_incomplete" });
       }

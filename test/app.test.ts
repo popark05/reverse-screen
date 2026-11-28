@@ -128,16 +128,48 @@ test("mobile action execution is opt-in and appends action plus post-action obse
   await app.close();
   observeCount = 0;
 
-  const enabledApp = buildApp({ observer, allowMobileActions: true });
+  const noPolicyApp = buildApp({ observer, allowMobileActions: true });
+  const noPolicySession = await noPolicyApp.inject({
+    method: "POST", url: "/v1/discovery-sessions",
+    payload: { application_id: "sample-app", platform: "android", target_id: "emulator-5554" }
+  });
+  const noPolicySessionId = noPolicySession.json().session_id;
+  await noPolicyApp.inject({ method: "POST", url: `/v1/discovery-sessions/${noPolicySessionId}/observe` });
+  const noPolicyResponse = await noPolicyApp.inject({
+    method: "POST", url: `/v1/discovery-sessions/${noPolicySessionId}/actions`,
+    payload: { context_type: "native", action: "tap", locator_strategy: "label", locator_value: "Continue", screen_id: "11111111-1111-4111-8111-111111111111", state_id: "22222222-2222-4222-8222-222222222222", target_element_key: "native-element:email" }
+  });
+  assert.equal(noPolicyResponse.statusCode, 403);
+  await noPolicyApp.close();
+  observeCount = 0;
+
+  let authorize = false;
+  const enabledApp = buildApp({
+    observer,
+    allowMobileActions: true,
+    authorizeMobileAction: async ({ session, action, headers }) => {
+      assert.equal(session.application_id, "sample-app");
+      assert.equal(action.action, "fill");
+      assert.equal("input_value" in action, false);
+      assert.ok(headers);
+      return authorize;
+    }
+  });
   const createdAgain = await enabledApp.inject({
     method: "POST", url: "/v1/discovery-sessions",
     payload: { application_id: "sample-app", platform: "android", target_id: "emulator-5554" }
   });
   const enabledSessionId = createdAgain.json().session_id;
   await enabledApp.inject({ method: "POST", url: `/v1/discovery-sessions/${enabledSessionId}/observe` });
+  const actionPayload = { context_type: "native", action: "fill", locator_strategy: "label", locator_value: "Email", input_value: "secret@example.test", screen_id: "11111111-1111-4111-8111-111111111111", state_id: "22222222-2222-4222-8222-222222222222", target_element_key: "native-element:email" };
+  const denied = await enabledApp.inject({
+    method: "POST", url: `/v1/discovery-sessions/${enabledSessionId}/actions`, payload: actionPayload
+  });
+  assert.equal(denied.statusCode, 403);
+  authorize = true;
   const action = await enabledApp.inject({
     method: "POST", url: `/v1/discovery-sessions/${enabledSessionId}/actions`,
-    payload: { context_type: "native", action: "fill", locator_strategy: "label", locator_value: "Email", input_value: "secret@example.test", screen_id: "11111111-1111-4111-8111-111111111111", state_id: "22222222-2222-4222-8222-222222222222", target_element_key: "native-element:email" }
+    payload: actionPayload
   });
   assert.equal(action.statusCode, 201);
   assert.equal(action.json().action.event_type, "action_executed");
