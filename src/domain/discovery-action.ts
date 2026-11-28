@@ -10,6 +10,9 @@ export interface DiscoveryActionRequest {
   locator_role?: string;
   locator_name?: string;
   webview_index?: number;
+  screen_id?: string;
+  state_id?: string;
+  target_element_key?: string;
   /** Used only by fill; deliberately omitted from all emitted events and logs. */
   input_value?: string;
 }
