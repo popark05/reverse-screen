@@ -85,7 +85,7 @@ test("Playwright discovery captures a PNG screenshot linked to its screen event"
   assert.deepEqual(observation.evidence[0]?.bytes, screenshot);
   assert.equal(observation.evidence[1]?.kind, "dom_snapshot");
   assert.equal(observation.evidence[1]?.content_type, "text/html; charset=utf-8");
-  assert.match(Buffer.from(observation.evidence[1]!.bytes).toString("utf8"), /\\[REDACTED\\]/);
+  assert.equal(Buffer.from(observation.evidence[1]!.bytes).toString("utf8").includes("[REDACTED]"), true);
   assert.equal(observation.evidence[2]?.kind, "accessibility_tree");
   assert.equal(observation.evidence[2]?.content_type, "application/json");
   assert.equal(observation.evidence[2]?.event_id, observation.events[0]?.event_id);
