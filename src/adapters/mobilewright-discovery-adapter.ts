@@ -304,12 +304,12 @@ export class MobilewrightDiscoveryAdapter {
               : text
                 ? { locator_strategy: "role_name", locator_role: role, locator_name: text }
                 : undefined;
-          addEvent({
+          if (actionLocator) addEvent({
             event_type: "action_candidate", screen_id: nativeScreenId, state_id: nativeStateId, occurred_at: observedAt,
             payload: {
               context_type: "native", action: isEditable(node) ? "fill" : "tap",
               target_element_key: elementKey, enabled: node.isEnabled,
-              ...(actionLocator ?? {})
+              ...actionLocator
             }
           });
         }
