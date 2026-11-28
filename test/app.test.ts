@@ -126,6 +126,7 @@ test("mobile action execution is opt-in and appends action plus post-action obse
   });
   assert.equal(disabled.statusCode, 501);
   await app.close();
+  observeCount = 0;
 
   const enabledApp = buildApp({ observer, allowMobileActions: true });
   const createdAgain = await enabledApp.inject({
