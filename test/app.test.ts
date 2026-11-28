@@ -106,8 +106,9 @@ test("mobile action execution is opt-in and appends action plus post-action obse
       event_id: "action-event", session_id: session.session_id, sequence: 1,
       event_type: "action_executed" as const, occurred_at: "2026-11-28T00:00:01.000Z",
       platform: session.platform,
-      screen_id: request.screen_id, state_id: request.state_id,
-      payload: { action: request.action, context_type: request.context_type, target_element_key: request.target_element_key, value_redacted: request.action === "fill" }
+      ...(request.screen_id ? { screen_id: request.screen_id } : {}),
+      ...(request.state_id ? { state_id: request.state_id } : {}),
+      payload: { action: request.action, context_type: request.context_type, ...(request.target_element_key ? { target_element_key: request.target_element_key } : {}), value_redacted: request.action === "fill" }
     })
   };
   const app = buildApp({ observer });
