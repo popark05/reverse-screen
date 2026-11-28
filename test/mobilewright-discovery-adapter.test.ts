@@ -119,3 +119,50 @@ test("observeWithEvidence captures a PNG screenshot and associates it with the n
   assert.deepEqual(result.evidence[0]?.bytes, screenshot);
   assert.equal(result.evidence[0]?.event_id, result.events[0]?.event_id);
 });
+
+test("emits a linked WebView detachment only after a complete later observation", async () => {
+  let webViewPresent = true;
+  const page = {
+    url: () => "https://app.example.test/checkout",
+    title: async () => "Checkout",
+    content: async () => "<html><body><button>Pay</button></body></html>",
+    locator: () => ({ count: async () => 1 }),
+    getByRole: () => ({ count: async () => 0 }),
+    close: async () => {}
+  };
+  const device = {
+    id: "emulator-5554",
+    screen: {
+      viewTree: async () => [],
+      getByWebView: () => ({
+        count: async () => webViewPresent ? 1 : 0,
+        nth: () => ({ page: async () => page })
+      }),
+      screenshot: async () => Buffer.from("png")
+    },
+    getForegroundApp: async () => ({ bundleId: "com.example.app" }),
+    screenSize: async () => ({ width: 1, height: 1, scale: 1 }),
+    close: async () => {}
+  };
+  const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "com.example.app" }, {
+    ios: { launch: async () => device as never },
+    android: { launch: async () => device as never }
+  });
+
+  const first = await adapter.observe(session);
+  const attached = first.find((event) => event.event_type === "transition_observed");
+  const firstWebScreen = first.find((event) => event.event_type === "screen_observed" && event.payload.context_type === "webview");
+  assert.ok(attached?.transition_id);
+  assert.ok(firstWebScreen);
+
+  webViewPresent = false;
+  const second = await adapter.observe(session);
+  const detached = second.find((event) => event.event_type === "transition_observed" && event.payload.transition_kind === "context_detachment");
+  const secondNativeScreen = second.find((event) => event.event_type === "screen_observed" && event.payload.context_type === "native");
+  assert.equal(detached?.transition_id, attached?.transition_id);
+  assert.equal(detached?.payload.direction, "webview_to_native");
+  assert.equal(detached?.payload.source_screen_id, firstWebScreen?.screen_id);
+  assert.equal(detached?.payload.target_screen_id, secondNativeScreen?.screen_id);
+  assert.equal(detached?.payload.navigation_verified, false);
+  assert.equal(detached?.payload.closure_reason, "not_present_in_complete_observation");
+});
