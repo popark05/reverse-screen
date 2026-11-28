@@ -72,3 +72,56 @@ test("invalid platform and malformed identifiers are rejected", async () => {
   assert.equal(response.statusCode, 400);
   await app.close();
 });
+
+
+test("mobile action execution is opt-in and appends action plus post-action observation events", async () => {
+  let observeCount = 0;
+  const observer = {
+    observe: async (session: { session_id: string; platform: "android" }) => [{
+      event_id: `event-${++observeCount}`, session_id: session.session_id, sequence: 1,
+      event_type: "screen_observed" as const, occurred_at: "2026-11-28T00:00:00.000Z",
+      platform: session.platform, payload: { context_type: "native" }
+    }],
+    executeAction: async (session: { session_id: string; platform: "android" }, request: { action: string; context_type: string }) => ({
+      event_id: "action-event", session_id: session.session_id, sequence: 1,
+      event_type: "action_executed" as const, occurred_at: "2026-11-28T00:00:01.000Z",
+      platform: session.platform,
+      payload: { action: request.action, context_type: request.context_type, value_redacted: request.action === "fill" }
+    })
+  };
+  const app = buildApp({ observer });
+  const created = await app.inject({
+    method: "POST", url: "/v1/discovery-sessions",
+    payload: { application_id: "sample-app", platform: "android", target_id: "emulator-5554" }
+  });
+  const sessionId = created.json().session_id;
+  const observed = await app.inject({ method: "POST", url: `/v1/discovery-sessions/${sessionId}/observe` });
+  assert.equal(observed.statusCode, 201);
+
+  const disabled = await app.inject({
+    method: "POST", url: `/v1/discovery-sessions/${sessionId}/actions`,
+    payload: { context_type: "native", action: "fill", locator_strategy: "label", locator_value: "Email", input_value: "secret@example.test" }
+  });
+  assert.equal(disabled.statusCode, 501);
+  await app.close();
+
+  const enabledApp = buildApp({ observer, allowMobileActions: true });
+  const createdAgain = await enabledApp.inject({
+    method: "POST", url: "/v1/discovery-sessions",
+    payload: { application_id: "sample-app", platform: "android", target_id: "emulator-5554" }
+  });
+  const enabledSessionId = createdAgain.json().session_id;
+  await enabledApp.inject({ method: "POST", url: `/v1/discovery-sessions/${enabledSessionId}/observe` });
+  const action = await enabledApp.inject({
+    method: "POST", url: `/v1/discovery-sessions/${enabledSessionId}/actions`,
+    payload: { context_type: "native", action: "fill", locator_strategy: "label", locator_value: "Email", input_value: "secret@example.test" }
+  });
+  assert.equal(action.statusCode, 201);
+  assert.equal(action.json().action.event_type, "action_executed");
+  assert.equal(action.json().action.payload.value_redacted, true);
+  assert.equal(JSON.stringify(action.json()).includes("secret@example.test"), false);
+  assert.deepEqual(action.json().observation_events.map((event: { sequence: number }) => event.sequence), [3]);
+  const events = await enabledApp.inject({ method: "GET", url: `/v1/discovery-sessions/${enabledSessionId}/events` });
+  assert.deepEqual(events.json().events.map((event: { sequence: number }) => event.sequence), [1, 2, 3]);
+  await enabledApp.close();
+});
