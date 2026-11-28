@@ -89,6 +89,66 @@ test("native-only apps complete discovery when no WebView is present", async () 
   assert.deepEqual(launchModes, [true, false], "only the initial observation should launch the app");
 });
 
+test("Android flattened WebView trees use the single bridge page for discovery and actions", async () => {
+  let clicked = false;
+  const page = {
+    url: () => "https://localhost/",
+    title: async () => "Hybrid demo",
+    content: async () => "<html><button>Switch channel</button></html>",
+    locator: (selector: string) => selector === "ion-button"
+      ? {
+          count: async () => 1,
+          nth: () => ({ innerText: async () => "Switch channel" })
+        }
+      : { count: async () => 1 },
+    getByRole: (role: string) => ({
+      count: async () => role === "button" ? 1 : 0,
+      nth: () => ({
+        getAttribute: async () => null,
+        innerText: async () => "",
+        boundingBox: async () => ({ x: 10, y: 20, width: 100, height: 40 }),
+        isVisible: async () => true,
+        isEnabled: async () => true
+      }),
+      click: async () => { clicked = true; }
+    }),
+    close: async () => {}
+  };
+  const device = {
+    id: "R3CR10LXLZW",
+    screen: {
+      viewTree: async () => [],
+      getByWebView: () => ({ count: async () => 0, page: async () => page }),
+      screenshot: async () => Buffer.from("png")
+    },
+    getForegroundApp: async () => ({ bundleId: "io.ionic.starter" }),
+    screenSize: async () => ({ width: 1080, height: 2400, scale: 3 }),
+    close: async () => {}
+  };
+  const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "io.ionic.starter" }, {
+    ios: { launch: async () => device as never },
+    android: { launch: async () => device as never }
+  });
+
+  const events = await adapter.observe(session);
+  const webScreen = events.find((event) =>
+    event.event_type === "screen_observed" && event.payload.context_type === "webview"
+  );
+  const candidate = events.find((event) =>
+    event.event_type === "action_candidate" && event.payload.context_type === "webview"
+  );
+  assert.equal(webScreen?.payload.url, "https://localhost/");
+  assert.equal(candidate?.payload.locator_role, "button");
+  assert.equal(candidate?.payload.locator_name, "Switch channel");
+
+  const action = await adapter.executeAction(session, {
+    context_type: "webview", action: "tap", locator_strategy: "role_name",
+    locator_role: "button", locator_name: "Switch channel", webview_index: 0
+  });
+  assert.equal(action.payload.outcome, "succeeded");
+  assert.equal(clicked, true);
+});
+
 test("labeled Android Compose views produce native tap candidates", async () => {
   const device = {
     id: "R3CR10LXLZW",

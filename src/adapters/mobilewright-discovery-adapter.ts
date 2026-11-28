@@ -44,6 +44,7 @@ interface WebPage {
 }
 interface WebViewLocator {
   count(): Promise<number>;
+  page(): Promise<WebPage>;
   nth(index: number): { page(): Promise<WebPage> };
 }
 interface NativeLocator {
@@ -176,8 +177,15 @@ export class MobilewrightDiscoveryAdapter {
         const webViews = device.screen.getByWebView();
         const webViewIndex = request.webview_index ?? 0;
         const count = await webViews.count();
-        if (webViewIndex >= count) throw new Error("mobilewright_action_webview_not_found");
-        page = await webViews.nth(webViewIndex).page();
+        if (count === 0 && webViewIndex === 0) {
+          // Android may flatten WebView DOM nodes into the native accessibility tree,
+          // even though Mobilewright's bridge can still attach to the page.
+          try { page = await webViews.page(); }
+          catch { throw new Error("mobilewright_action_webview_not_found"); }
+        } else {
+          if (webViewIndex >= count) throw new Error("mobilewright_action_webview_not_found");
+          page = await webViews.nth(webViewIndex).page();
+        }
         const locator = request.locator_strategy === "label"
           ? page.getByLabel(request.locator_value!)
           : request.locator_strategy === "test_id"
@@ -368,15 +376,20 @@ export class MobilewrightDiscoveryAdapter {
     previousWebViews: Map<number, { contextInstanceId: string; screenId: string; stateId: string; url: string }>,
     currentWebViews: Map<number, { contextInstanceId: string; screenId: string; stateId: string; url: string }>
   ): Promise<boolean> {
+    const webViews = device.screen.getByWebView();
     let webViewCount = 0;
-    try { webViewCount = await device.screen.getByWebView().count(); }
+    try { webViewCount = await webViews.count(); }
     catch { return false; }
+    // Android can expose WebView DOM as flattened native accessibility nodes while
+    // its bridge still provides one unambiguous page.
+    const flattenedSingleWebView = webViewCount === 0;
+    if (flattenedSingleWebView) webViewCount = 1;
     const maxElements = this.options.maxWebViewElements ?? 200;
     let observationComplete = true;
     for (let index = 0; index < webViewCount; index++) {
       let page: WebPage | undefined;
       try {
-        page = await device.screen.getByWebView().nth(index).page();
+        page = flattenedSingleWebView ? await webViews.page() : await webViews.nth(index).page();
         const [url, title, html] = await Promise.all([Promise.resolve(page.url()), page.title(), page.content()]);
         const domElements = page.locator("*");
         const domCount = await domElements.count();
@@ -450,20 +463,32 @@ export class MobilewrightDiscoveryAdapter {
           });
         }
         let observed = 0;
-        for (const role of WEB_ROLES) {
+        const roleLocators = WEB_ROLES.map((role) => page!.getByRole(role));
+        const roleCounts = await Promise.all(roleLocators.map((locator) => locator.count().catch(() => 0)));
+        for (let roleIndex = 0; roleIndex < WEB_ROLES.length; roleIndex++) {
           if (observed >= maxElements) break;
-          const locator = page.getByRole(role);
-          const count = await locator.count().catch(() => 0);
+          const role = WEB_ROLES[roleIndex]!;
+          const locator = roleLocators[roleIndex]!;
+          const count = roleCounts[roleIndex] ?? 0;
+          const ionicButtons = role === "button" ? page.locator("ion-button") : undefined;
+          const ionicButtonCount = ionicButtons ? await ionicButtons.count().catch(() => 0) : 0;
           for (let i = 0; i < count && observed < maxElements; i++) {
             const element = locator.nth(i);
             try {
               if (!(await element.isVisible())) continue;
-              const [ariaLabel, testId, placeholder, name, id, text, bounds, enabled] = await Promise.all([
+              const [ariaLabel, testId, placeholder, name, id, roleText, bounds, enabled] = await Promise.all([
                 element.getAttribute("aria-label"), element.getAttribute("data-testid"),
                 element.getAttribute("placeholder"), element.getAttribute("name"), element.getAttribute("id"),
                 ["textbox"].includes(role) ? Promise.resolve("") : element.innerText().catch(() => ""),
                 element.boundingBox(), element.isEnabled().catch(() => true)
               ]);
+              // Ionic's Web Components may expose the correct ARIA role while the
+              // role locator omits slotted text. Read the corresponding custom
+              // element text as a fallback so its role/name remains actionable.
+              let text = roleText;
+              if (!text && ionicButtons && i < ionicButtonCount) {
+                try { text = await ionicButtons.nth(i).innerText(); } catch { /* optional Ionic fallback */ }
+              }
               const accessibleName = ariaLabel || placeholder || name || testId || id || text.trim().slice(0, 200);
               const key = `web-element:${stableKey([index, role, accessibleName, testId ?? "", id ?? "", i].join("|"))}`;
               addEvent({
@@ -496,6 +521,10 @@ export class MobilewrightDiscoveryAdapter {
           }
         }
       } catch (error) {
+        if (flattenedSingleWebView && !page) {
+          // No bridge page means this is a native-only app (or the WebView detached).
+          return true;
+        }
         observationComplete = false;
         addEvent({
           event_type: "error", occurred_at: observedAt,
