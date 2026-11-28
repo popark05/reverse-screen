@@ -55,8 +55,6 @@ export class HybridContextLifecycleTracker {
   reconcile(
     sessionId: string,
     observedAt: string,
-    _nativeScreenId: string,
-    _nativeStateId: string,
     observations: HybridWebViewContextObservation[]
   ): HybridContextLifecycleResult {
     let contexts = this.sessions.get(sessionId);
