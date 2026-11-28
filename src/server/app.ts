@@ -51,6 +51,9 @@ const executeActionSchema = {
     locator_role: { type: "string", minLength: 1, maxLength: 100 },
     locator_name: { type: "string", minLength: 1, maxLength: 500 },
     webview_index: { type: "integer", minimum: 0, maximum: 100 },
+    screen_id: { type: "string", format: "uuid" },
+    state_id: { type: "string", format: "uuid" },
+    target_element_key: { type: "string", minLength: 1, maxLength: 500 },
     input_value: { type: "string", maxLength: 10000 }
   }
 } as const;
