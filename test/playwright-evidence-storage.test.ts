@@ -66,7 +66,8 @@ test("web discovery persists screenshot, DOM snapshot, and accessibility tree ar
   const app = buildApp({
     observer,
     objectStorage: storage,
-    objectStorageBucket: "reverse-screen"
+    objectStorageBucket: "reverse-screen",
+    authorizeEvidenceRead: ({ authorization }) => authorization === "Bearer qa-platform-service-token-012345678901234567890123"
   });
 
   const created = await app.inject({
@@ -87,7 +88,8 @@ test("web discovery persists screenshot, DOM snapshot, and accessibility tree ar
 
   const listed = await app.inject({
     method: "GET",
-    url: `/v1/discovery-sessions/${sessionId}/evidence`
+    url: `/v1/discovery-sessions/${sessionId}/evidence`,
+    headers: { authorization: "Bearer qa-platform-service-token-012345678901234567890123" }
   });
   const artifacts = listed.json().items as Array<{
     evidence_id: string; kind: string; content_type: string; byte_size: number; sha256: string; event_id: string;

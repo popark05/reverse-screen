@@ -5,6 +5,7 @@ import { InMemoryDiscoverySessionStore } from "../domain/discovery-session.js";
 import { InMemoryEvidenceArtifactStore } from "../domain/evidence-artifact.js";
 import { PostgresDiscoveryRepository, PostgresEvidenceArtifactRepository } from "../infrastructure/postgres-discovery-repository.js";
 import { S3ObjectStorage } from "../infrastructure/s3-object-storage.js";
+import { verifyServiceBearerToken } from "../security/service-token.js";
 import { buildApp } from "./app.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -25,6 +26,13 @@ if (mobileAdapter !== "disabled" && mobileAdapter !== "mobilewright") {
 }
 
 const s3Bucket = process.env.S3_BUCKET;
+const qaServiceToken = process.env.REVERSE_SCREEN_QA_SERVICE_TOKEN;
+if (qaServiceToken && Buffer.byteLength(qaServiceToken) < 32) {
+  throw new Error("REVERSE_SCREEN_QA_SERVICE_TOKEN must contain at least 32 bytes");
+}
+const authorizeEvidenceRead = qaServiceToken
+  ? ({ authorization }: { authorization?: string | string[] }) => verifyServiceBearerToken(authorization, qaServiceToken)
+  : undefined;
 const objectStorage = s3Bucket
   ? new S3ObjectStorage({
       bucket: s3Bucket,
@@ -48,6 +56,7 @@ const app = buildApp({
   evidence: evidenceRepository ?? new InMemoryEvidenceArtifactStore(),
   ...(observer ? { observer } : {}),
   allowMobileActions: process.env.MOBILE_ACTION_EXECUTION_ENABLED === "true",
+  ...(authorizeEvidenceRead ? { authorizeEvidenceRead } : {}),
   ...(objectStorage ? {
     objectStorage,
     objectStorageBucket: s3Bucket!,

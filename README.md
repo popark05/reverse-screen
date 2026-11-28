@@ -172,6 +172,10 @@ Returns a short-lived `download_url`. The API persists neither presigned URL; on
 
 Supported kinds: `screenshot`, `video`, `dom_snapshot`, `accessibility_tree`, `log`, `network_trace`.
 
+### QA Platform service authentication
+
+Set `REVERSE_SCREEN_QA_SERVICE_TOKEN` to a cryptographically random secret of at least 32 bytes in Reverse Screen, and set the same value as `REVERSE_SCREEN_SERVICE_TOKEN` in QA Platform. Keep it in deployment secret storage, rotate both deployments together, and use TLS outside local development. The evidence metadata, session evidence-list, and signed download-URL read endpoints require this bearer token. They return `503` when service authentication is not configured and `401` for a missing or invalid token. Other Reverse Screen API routes are not covered by this service-token check.
+
 ## API
 
 - `GET /health`
@@ -197,7 +201,7 @@ Event ingestion is idempotent by `event_id`; PostgreSQL additionally enforces un
 - Client-originated evidence uses presigned upload/download URLs. Mobilewright discovery can additionally upload its captured native screenshot from the API process; Playwright web discovery does not yet capture screenshots through this evidence pipeline.
 - SHA-256 verification depends on the object store returning the S3 `ChecksumSHA256` field from `HeadObject`; the implementation rejects objects where that checksum is unavailable.
 - The host application must provide authenticated identity and configure `authorizeMobileAction` to enforce session ownership, tenant isolation, and its action policy. The API denies mobile actions when the authorizer is absent or rejects. Other API routes do not gain authentication from this hook.
-- The upload URL itself is not persisted as an upload-intent record. Confirmation is bound to the generated evidence ID and session-scoped object key, but callers still require authenticated access control before production exposure.
+- The upload URL itself is not persisted as an upload-intent record. Confirmation is bound to the generated evidence ID and session-scoped object key. Upload and mutation routes still require authenticated access control before production exposure.
 - Mobilewright native screenshot capture is implemented; video recording and persisted raw DOM snapshots are not yet integrated. DOM snapshot contents are not stored by the adapter; only their SHA-256 digest and summary metadata are emitted.
 
 - Repeated calls to the Mobilewright adapter within the same discovery session retain an in-memory WebView context instance ID by WebView slot. They emit `context_persisted` when that slot is observed again and `context_detachment` when a successful enumeration no longer contains it. These lifecycle events describe observed presence/absence only; slot reuse, navigation causality, and user-triggered return-to-native behavior are not verified.
@@ -205,4 +209,4 @@ Event ingestion is idempotent by `event_id`; PostgreSQL additionally enforces un
 
 - Mobile action execution is opt-in via `MOBILE_ACTION_EXECUTION_ENABLED=true` and an explicit `authorizeMobileAction` policy. Missing, rejecting, or failing authorization denies execution; fill values are omitted from the policy context and discovery events. The host must supply trusted authentication and enforce session ownership, tenant isolation, and application-specific action policy. Other API routes remain unauthenticated.
 - In-memory mode is intended for tests/local exploration, not multi-process production use.
-- Real-device and simulator E2E validation is still required; CI currently covers fake-driver/unit tests.
+- A live native-action smoke check passed on iPhone 17 Pro (iOS 26.3) and Samsung SM-N981N (Android), using the built-in Settings app to observe, tap a discovered navigation control, and observe the changed screen. Target-application flows, hybrid WebView actions, and CI coverage on mobile devices still require validation; automated tests currently use fake drivers.

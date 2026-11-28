@@ -12,6 +12,7 @@ const session: DiscoverySession = {
 
 test("executes native tap actions through Mobilewright locators", async () => {
   const calls: string[] = [];
+  const launchModes: (boolean | undefined)[] = [];
   const nativeLocator = {
     tap: async () => { calls.push("native-tap"); },
     fill: async (value: string) => { calls.push(`native-fill:${value}`); }
@@ -30,7 +31,8 @@ test("executes native tap actions through Mobilewright locators", async () => {
     close: async () => { calls.push("device-close"); }
   };
   const adapter = new MobilewrightDiscoveryAdapter({ bundleId: "com.example.app" }, {
-    ios: { launch: async () => device as never }, android: { launch: async () => device as never }
+    ios: { launch: async () => device as never },
+    android: { launch: async (options) => { launchModes.push(options.autoAppLaunch); return device as never; } }
   });
   const event = await adapter.executeAction(session, {
     context_type: "native", action: "tap", locator_strategy: "role_name",
@@ -45,6 +47,7 @@ test("executes native tap actions through Mobilewright locators", async () => {
   assert.equal(event.screen_id, "11111111-1111-4111-8111-111111111111");
   assert.equal(event.state_id, "22222222-2222-4222-8222-222222222222");
   assert.equal(event.payload.target_element_key, "native-element:abc123");
+  assert.deepEqual(launchModes, [false], "actions must preserve the app's current state");
   assert.deepEqual(calls, ["role:button:Continue", "native-tap", "device-close"]);
 });
 
