@@ -155,16 +155,83 @@ export class PlaywrightDiscoveryAdapter {
     const screenEvent = events.find((event) => event.event_type === "screen_observed");
     if (!screenEvent) return { events, evidence: [] };
 
-    const bytes = await this.page.screenshot({ type: "png" });
+    const [screenshot, snapshots] = await Promise.all([
+      this.page.screenshot({ type: "png" }),
+      this.page.locator("body").evaluate((body) => {
+        const clone = body.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll("script").forEach((node) => node.remove());
+        clone.querySelectorAll("input").forEach((node) => {
+          node.setAttribute("value", "[REDACTED]");
+          node.removeAttribute("checked");
+        });
+        clone.querySelectorAll("textarea").forEach((node) => {
+          node.textContent = "[REDACTED]";
+        });
+        clone.querySelectorAll("[contenteditable='true']").forEach((node) => {
+          node.textContent = "[REDACTED]";
+        });
+
+        const inferAccessibleRole = (element: HTMLElement): string => {
+          const explicit = element.getAttribute("role");
+          if (explicit) return explicit;
+          const tag = element.tagName.toLowerCase();
+          if (tag === "a" && element.hasAttribute("href")) return "link";
+          if (tag === "button") return "button";
+          if (tag === "textarea") return "textbox";
+          if (tag === "select") return "combobox";
+          if (tag === "input") {
+            const type = (element as HTMLInputElement).type;
+            if (type === "checkbox" || type === "radio" || type === "button" || type === "submit") return type === "submit" || type === "button" ? "button" : type;
+            return "textbox";
+          }
+          if (/^h[1-6]$/.test(tag)) return "heading";
+          if (tag === "img") return "img";
+          return "generic";
+        };
+        const buildNode = (element: HTMLElement): Record<string, unknown> => {
+          const labels = "labels" in element ? Array.from((element as HTMLInputElement).labels ?? []).map((label) => label.innerText.trim()).join(" ") : "";
+          const name = element.getAttribute("aria-label") || labels || element.getAttribute("alt") || element.getAttribute("title") || "";
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+          return {
+            role: inferAccessibleRole(element),
+            ...(name ? { name: name.slice(0, 300) } : {}),
+            tag: element.tagName.toLowerCase(),
+            visible,
+            enabled: !("disabled" in element && Boolean((element as HTMLButtonElement).disabled)),
+            children: Array.from(element.children).filter((child): child is HTMLElement => child instanceof HTMLElement).map(buildNode)
+          };
+        };
+        return { html: clone.outerHTML, accessibilityTree: buildNode(body) };
+      })
+    ]);
+    const capturedAt = screenEvent.occurred_at;
     return {
       events,
-      evidence: [{
-        kind: "screenshot",
-        content_type: "image/png",
-        bytes,
-        captured_at: screenEvent.occurred_at,
-        event_id: screenEvent.event_id
-      }]
+      evidence: [
+        {
+          kind: "screenshot",
+          content_type: "image/png",
+          bytes: screenshot,
+          captured_at: capturedAt,
+          event_id: screenEvent.event_id
+        },
+        {
+          kind: "dom_snapshot",
+          content_type: "text/html; charset=utf-8",
+          bytes: Buffer.from(snapshots.html, "utf8"),
+          captured_at: capturedAt,
+          event_id: screenEvent.event_id
+        },
+        {
+          kind: "accessibility_tree",
+          content_type: "application/json",
+          bytes: Buffer.from(JSON.stringify(snapshots.accessibilityTree), "utf8"),
+          captured_at: capturedAt,
+          event_id: screenEvent.event_id
+        }
+      ]
     };
   }
 
